@@ -1,5 +1,6 @@
 package exp.command;
 
+import exp.command.aesh.AddCommand;
 import exp.entity.Folder;
 import exp.entity.Node;
 import exp.entity.NodeGroup;
@@ -16,6 +17,12 @@ import jakarta.enterprise.inject.spi.CDI;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import jakarta.transaction.Transactional;
+import org.aesh.AeshConsoleRunner;
+import org.aesh.AeshRuntimeRunner;
+import org.aesh.command.CommandDefinition;
+import org.aesh.command.CommandResult;
+import org.aesh.command.invocation.CommandInvocation;
+import org.aesh.command.option.Argument;
 import org.hibernate.jdbc.WorkExecutor;
 import picocli.AutoComplete;
 import picocli.CommandLine;
@@ -111,8 +118,67 @@ public class H5m implements QuarkusApplication {
         CommandLine gen = cmd.getSubcommands().get("generate-completion");
         gen.getCommandSpec().usageMessage().hidden(true);
         int returnCode = cmd.execute(args);
+
+        // atm this will stop the testsuite
+
+        AeshConsoleRunner.builder()
+                .command(ScanCommand.class)
+                .command(StructureCommand.class)
+                .command(AddCommand.class)
+                .prompt("[user@h5m]$ ")
+                .addExitCommand()
+                .start();
+
         workExecutor.shutdown();
         return returnCode;
+    }
+
+    @CommandDefinition(name="structure",description = "use yaup to compute the structure of a folder",aliases = {"shape"})
+    public static class StructureCommand implements org.aesh.command.Command {
+
+        @Argument(description = "folder name")
+        private String folderName;
+
+        FolderService folderService;
+
+        @Override
+        public CommandResult execute(CommandInvocation ci) {
+            folderService = CDI.current().select(FolderService.class).get();
+
+            Folder folder = folderService.byName(folderName);
+            if(folder == null){
+                ci.println("could not find folder "+folderName);
+                return CommandResult.FAILURE;
+            }
+
+            ci.println("Computing "+folderName+"...");
+            folderService.structure(folder);
+            return CommandResult.SUCCESS;
+        }
+    }
+
+    @CommandDefinition(name = "scan", description = "scan folder for new files and compute values")
+    public static class ScanCommand implements org.aesh.command.Command {
+
+        @Argument(description = "folder name")
+        private String folderName;
+
+        FolderService folderService;
+
+        @Override
+        public CommandResult execute(CommandInvocation ci) {
+            folderService = CDI.current().select(FolderService.class).get();
+
+            Folder folder = folderService.byName(folderName);
+            if(folder == null){
+                ci.println("could not find folder "+folderName);
+                return CommandResult.FAILURE;
+            }
+
+            ci.println("Scanning "+folderName+"...");
+            folderService.scan(folder);
+            return CommandResult.SUCCESS;
+        }
     }
 
 

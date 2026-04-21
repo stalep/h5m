@@ -73,6 +73,18 @@ public class LoadLegacyTests implements Callable<Integer> {
         public List<NodeEntity> getLabelNodes(String name){
             return getNodes(name).stream().filter(nodeToLabel::containsKey).collect(Collectors.toList());
         }
+        public void removeNodes(String name){
+            if(nodesByName.containsKey(name)){
+                List<NodeEntity> nodes = new ArrayList<>(nodesByName.get(name));
+                for(NodeEntity node : nodes){
+                    nodesByName.remove(name, node);
+                    Label label = nodeToLabel.remove(node);
+                    if(label != null){
+                        labelToNodes.remove(label);
+                    }
+                }
+            }
+        }
 
     }
 
@@ -90,6 +102,58 @@ public class LoadLegacyTests implements Callable<Integer> {
             return padding+message.replaceAll("\n","\n"+padding);
         }
     }
+    /**
+     * Wraps a JS function to coerce string-encoded numbers to actual numbers.
+     * Horreum data sometimes stores numbers as JSON strings (e.g. "759660" instead of 759660).
+     * Horreum's Util.java handled this implicitly, but h5m's JS engine passes values as-is.
+     */
+    static String wrapWithNumberCoercion(String function) {
+        if (function == null || function.isBlank()) {
+            return function;
+        }
+        List<String> params = JsNode.getParameterNames(function);
+        if (params == null || params.isEmpty()) {
+            return function;
+        }
+        StringBuilder coercion = new StringBuilder();
+        for (String param : params) {
+            if (param.contains("{") || param.contains("}")) {
+                continue;
+            }
+            coercion.append(param)
+                    .append(" = typeof ")
+                    .append(param)
+                    .append(" === \"string\" && !isNaN(")
+                    .append(param)
+                    .append(") ? Number(")
+                    .append(param)
+                    .append(") : ")
+                    .append(param)
+                    .append("; ");
+        }
+        if (coercion.isEmpty()) {
+            return function;
+        }
+        if (function.contains("=>")) {
+            int arrowIdx = function.indexOf("=>");
+            String paramsPart = function.substring(0, arrowIdx + 2).trim();
+            String body = function.substring(arrowIdx + 2).trim();
+            if (body.startsWith("{")) {
+                // arrow with block body: (...) => { ... }
+                return paramsPart + " { " + coercion + body.substring(1);
+            } else {
+                // arrow with expression body: (...) => expr
+                return paramsPart + " { " + coercion + "return " + body + "; }";
+            }
+        } else if (function.trim().startsWith("function")) {
+            int braceIdx = function.indexOf("{");
+            if (braceIdx >= 0) {
+                return function.substring(0, braceIdx + 1) + " " + coercion + function.substring(braceIdx + 1);
+            }
+        }
+        return function;
+    }
+
     public static void log(String message){
         log(0,message);
     }
@@ -210,7 +274,7 @@ public class LoadLegacyTests implements Callable<Integer> {
                 group.addNode(rtrn);
             }
         }else {
-            String function = label.function;
+            String function = wrapWithNumberCoercion(label.function);
             rtrn = JsNode.parse(label.name, function, labelNodesByName::get);
             if (rtrn == null) {
                 List<String> params = JsNode.getParameterNames(label.function);
@@ -338,6 +402,7 @@ public class LoadLegacyTests implements Callable<Integer> {
                 }
                 FolderEntity folder = new FolderEntity();
                 folder.name=test.name;
+                folder.group = new NodeGroupEntity(test.name);
 
                 NodeTracking nodeTracking = new NodeTracking();
 
@@ -368,8 +433,17 @@ public class LoadLegacyTests implements Callable<Integer> {
                     assert transformers.size()==transformids.size();
 
                     if(transformers.size() > 1){
-                        log("MORE THAN 1 TRANSFORMER FOR "+test);
-                    }else {
+                        long distinctTargets = transformers.stream().map(Transformer::targetUri).distinct().count();
+                        if(distinctTargets > 1){
+                            log("SKIPPING "+test+" : multiple transformers with different target schemas");
+                            continue;
+                        }
+                        // multiple transformers for the same target schema (schema version evolution), pick the one with the most extractors
+                        Transformer best = transformers.stream().max(Comparator.comparingInt(t -> t.extractors().size())).get();
+                        transformers = Set.of(best);
+                        log(2, "multiple transformers for same target, using " + best.name() + " (" + best.extractors().size() + " extractors)");
+                    }
+                    {
                         for (Transformer transformer : transformers) {
                             List<Extractor> renamedExtractors = new ArrayList<>();
                             Map<String,String> extractorAliases = new HashMap<>();
@@ -402,8 +476,8 @@ public class LoadLegacyTests implements Callable<Integer> {
                             }
                             for(LabelDef labelDef : labelDefs){
                                 if(nodeTracking.hasNode(labelDef.name)){
-                                    //conflicting name for label but ignorable
-                                    System.err.println("transform label conflict for "+labelDef+"\n  conflicts with "+nodeTracking.getNodes(labelDef.name));
+                                    log(4,"de-duplicating "+labelDef.name+" (target schema label replaces transformer extractor)");
+                                    nodeTracking.removeNodes(labelDef.name);
                                 }
                                 try(PreparedStatement statement = connection.prepareStatement("select name,jsonpath,isarray from label_extractors where label_id = ?")){
                                     statement.setLong(1,labelDef.id);
@@ -693,9 +767,7 @@ public class LoadLegacyTests implements Callable<Integer> {
                         }
                     }
                 }
-                //TODO create a folderService method that persists an entity
-                FolderEntity.persist(folder);
-                //folderService.create(folder);
+                folderService.create(folder);
             }
         }
         finally {

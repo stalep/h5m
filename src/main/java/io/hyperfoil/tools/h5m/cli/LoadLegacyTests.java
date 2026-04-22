@@ -459,7 +459,7 @@ public class LoadLegacyTests implements Callable<Integer> {
                             folder.group.addNode(transform);
                             nodeTracking.addNode(transform);
 
-                            NodeEntity dataset = new JqNode("dataset",".[]",List.of(transform));
+                            NodeEntity dataset = new JqNode("dataset","if type == \"array\" then .[] else . end",List.of(transform));
                             dataset.group=folder.group;
                             nodeTracking.addNode(dataset);
 

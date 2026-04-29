@@ -29,7 +29,7 @@ public abstract class NodeEntity extends PanacheEntity implements Comparable<Nod
     public MultiIterationType multiType = MultiIterationType.Length;
     public ScalarVariableMethod scalarMethod = ScalarVariableMethod.First;
 
-    @ManyToOne(cascade = { CascadeType.PERSIST, CascadeType.MERGE }, fetch = FetchType.LAZY )
+    @ManyToOne(cascade = { CascadeType.PERSIST, CascadeType.REFRESH }, fetch = FetchType.LAZY )
     @JoinColumn(name = "group_id")
     @JsonIdentityInfo(generator = ObjectIdGenerators.PropertyGenerator.class, property = "group_id")
 //    @JsonIdentityReference(alwaysAsId = true)
@@ -38,7 +38,7 @@ public abstract class NodeEntity extends PanacheEntity implements Comparable<Nod
 
     //making this eager causes too many joins
     //cannot cascade delete because this entity "owns" the reference to the parent values
-    @ManyToMany(cascade = { CascadeType.PERSIST, CascadeType.MERGE }, fetch = FetchType.LAZY )
+    @ManyToMany(cascade = { CascadeType.PERSIST , CascadeType.REFRESH, CascadeType.MERGE, CascadeType.DETACH }, fetch = FetchType.LAZY )
     @JoinTable(
             name="node_edge",
             joinColumns = @JoinColumn(name = "child_id"),
@@ -147,7 +147,13 @@ public abstract class NodeEntity extends PanacheEntity implements Comparable<Nod
 
     @Override
     public String toString(){
-        return getClass().getSimpleName()+"< name="+name+", op="+operation+", id="+id+", source.ids=["+sources.stream().map(s->""+s.id).collect(Collectors.joining(" "))+"]>";
+        String sourceIds;
+        try {
+            sourceIds = sources.stream().map(s -> "" + s.id).collect(Collectors.joining(" "));
+        } catch (Exception e) {
+            sourceIds = "?";
+        }
+        return getClass().getSimpleName()+"< name="+name+", op="+operation+", id="+id+", source.ids=["+sourceIds+"]>";
     }
 
     @Override

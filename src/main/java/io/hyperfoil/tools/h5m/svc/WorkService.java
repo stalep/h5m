@@ -164,6 +164,7 @@ public class WorkService implements WorkServiceInterface {
 
     @Transactional
     public void execute(Work w){
+
         WorkQueue workQueue = workExecutor.getWorkQueue();
         boolean decrementDeferred = false;
         try {

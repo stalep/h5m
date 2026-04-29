@@ -54,6 +54,11 @@ public class RelativeDifference extends NodeEntity implements DetectionNode {
         }
     }
 
+    private static final String FINGERPRINT_NODE_ID = "fingerprintNodeId";
+    private static final String GROUP_BY_NODE_ID = "groupByNodeId";
+    private static final String RANGE_NODE_ID = "rangeNodeId";
+    private static final String DOMAIN_NODE_ID = "domainNodeId";
+
     public void setNodes(NodeEntity fingerprint, NodeEntity groupBy, NodeEntity range, NodeEntity domain){
         List<NodeEntity> sources = new ArrayList<>();
         sources.add(fingerprint);
@@ -63,30 +68,56 @@ public class RelativeDifference extends NodeEntity implements DetectionNode {
             sources.add(domain);
         }
         this.sources = sources;
+        config.set(FINGERPRINT_NODE_ID, fingerprint.id);
+        config.set(GROUP_BY_NODE_ID, groupBy.id);
+        config.set(RANGE_NODE_ID, range.id);
+        if(domain != null){
+            config.set(DOMAIN_NODE_ID, domain.id);
+        }
+        operation = config.toString();
+    }
+
+    private NodeEntity findSourceById(String configKey){
+        long nodeId = config.getLong(configKey);
+        return sources.stream().filter(s -> s.id == nodeId).findFirst().orElse(null);
     }
 
     @Transient
     public NodeEntity getRangeNode(){
+        if(config.has(RANGE_NODE_ID)){
+            return findSourceById(RANGE_NODE_ID);
+        }
         return sources.get(2);
     }
 
-    //domain node can be null
     @Transient
     public NodeEntity getDomainNode(){
+        if(config.has(DOMAIN_NODE_ID)){
+            return findSourceById(DOMAIN_NODE_ID);
+        }
         return sources.size() > 3 ? sources.get(3) : null;
     }
 
     @Transient
-    public NodeEntity getGroupByNode(){return sources.get(1);}
+    public NodeEntity getGroupByNode(){
+        if(config.has(GROUP_BY_NODE_ID)){
+            return findSourceById(GROUP_BY_NODE_ID);
+        }
+        return sources.get(1);
+    }
 
     @Transient
     public NodeEntity getFingerprintNode(){
+        if(config.has(FINGERPRINT_NODE_ID)){
+            return findSourceById(FINGERPRINT_NODE_ID);
+        }
         return sources.get(0);
     }
 
     @Transient
     public List<NodeEntity> getFingerprintNodes(){
-        return sources.get(0).sources;
+        NodeEntity fp = getFingerprintNode();
+        return fp != null ? fp.sources : List.of();
     }
 
 

@@ -59,26 +59,48 @@ public class FixedThreshold extends NodeEntity implements DetectionNode {
         }
     }
 
+    private static final String FINGERPRINT_NODE_ID = "fingerprintNodeId";
+    private static final String GROUP_BY_NODE_ID = "groupByNodeId";
+    private static final String RANGE_NODE_ID = "rangeNodeId";
+
     public void setNodes(NodeEntity fingerprint, NodeEntity groupBy, NodeEntity range) {
         List<NodeEntity> sources = new ArrayList<>();
         sources.add(fingerprint);
         sources.add(groupBy);
         sources.add(range);
         this.sources = sources;
+        config.set(FINGERPRINT_NODE_ID, fingerprint.id);
+        config.set(GROUP_BY_NODE_ID, groupBy.id);
+        config.set(RANGE_NODE_ID, range.id);
+        operation = config.toString();
+    }
+
+    private NodeEntity findSourceById(String configKey){
+        long nodeId = config.getLong(configKey);
+        return sources.stream().filter(s -> s.id == nodeId).findFirst().orElse(null);
     }
 
     @Transient
     public NodeEntity getFingerprintNode() {
+        if(config.has(FINGERPRINT_NODE_ID)){
+            return findSourceById(FINGERPRINT_NODE_ID);
+        }
         return sources.get(0);
     }
 
     @Transient
     public NodeEntity getGroupByNode() {
+        if(config.has(GROUP_BY_NODE_ID)){
+            return findSourceById(GROUP_BY_NODE_ID);
+        }
         return sources.get(1);
     }
 
     @Transient
     public NodeEntity getRangeNode() {
+        if(config.has(RANGE_NODE_ID)){
+            return findSourceById(RANGE_NODE_ID);
+        }
         return sources.get(2);
     }
 

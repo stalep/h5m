@@ -1,9 +1,11 @@
-import type { Node as ApiNode } from '@client/types.gen.ts';
+import type { Node as ApiNode, UploadSummary } from '@client/types.gen.ts';
 
 import { NodeGraphVisualizer } from '@app/components/NodeGraphVisualizer';
 import {
+  CodeSnippet,
   ErrorBoundary,
   InlineLoading,
+  Pagination,
   SkeletonText,
   StructuredListBody,
   StructuredListCell,
@@ -17,10 +19,21 @@ import {
   Tabs,
   Tag,
 } from '@carbon/react';
-import { byIdOptions, listFoldersOptions } from '@client/@tanstack/react-query.gen.ts';
-import { useSuspenseQuery } from '@tanstack/react-query';
-import { Suspense, useCallback } from 'react';
+import { byIdOptions, getUploadsOptions, getValueDataOptions, listFoldersOptions } from '@client/@tanstack/react-query.gen.ts';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { Suspense, useCallback, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+
+function formatDate(date?: string | null): string {
+  if (!date) return '—';
+  try {
+    const d = new Date(date);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return String(date);
+  }
+}
 
 const NodesTab = ({ groupId }: { groupId: number }) => {
   const { data: nodeGroup } = useSuspenseQuery(byIdOptions({ path: { id: groupId } }));
@@ -53,12 +66,98 @@ const NodesTab = ({ groupId }: { groupId: number }) => {
   );
 };
 
+const UploadDetail = ({ valueId }: { valueId: number }) => {
+  const { data, isLoading, isError } = useQuery(
+    getValueDataOptions({ path: { id: valueId } }),
+  );
+
+  if (isLoading) return <SkeletonText paragraph={true} lineCount={3} />;
+  if (isError) return <InlineLoading status="error" description="Failed to load data" />;
+
+  return (
+    <div style={{ padding: 'var(--cds-spacing-03)', maxHeight: '400px', overflow: 'auto' }}>
+      <CodeSnippet type="multi" wrapText>
+        {JSON.stringify(data, null, 2)}
+      </CodeSnippet>
+    </div>
+  );
+};
+
+const UploadsTab = ({ folderName }: { folderName: string }) => {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const offset = (page - 1) * pageSize;
+
+  const { data: uploads, isLoading } = useQuery(
+    getUploadsOptions({
+      path: { name: folderName },
+      query: { limit: pageSize, offset },
+    }),
+  );
+
+  if (isLoading) {
+    return <SkeletonText paragraph={true} lineCount={5} />;
+  }
+
+  if (!uploads || uploads.length === 0) {
+    return <p>No uploads yet</p>;
+  }
+
+  return (
+    <>
+      <StructuredListWrapper>
+        <StructuredListHead>
+          <StructuredListRow head>
+            <StructuredListCell head>ID</StructuredListCell>
+            <StructuredListCell head>Uploaded</StructuredListCell>
+            <StructuredListCell head>Values</StructuredListCell>
+          </StructuredListRow>
+        </StructuredListHead>
+        <StructuredListBody>
+          {uploads.map((upload: UploadSummary) => (
+            <span key={upload.id}>
+              <StructuredListRow
+                onClick={() => setExpandedId(expandedId === upload.id ? null : (upload.id ?? null))}
+                style={{ cursor: 'pointer' }}
+              >
+                <StructuredListCell>
+                  {expandedId === upload.id ? '▼' : '▶'} {upload.id}
+                </StructuredListCell>
+                <StructuredListCell>
+                  {formatDate(upload.createdAt as unknown as string)}
+                </StructuredListCell>
+                <StructuredListCell>{upload.valueCount ?? 0}</StructuredListCell>
+              </StructuredListRow>
+              {expandedId === upload.id && upload.id != null && (
+                <div style={{ padding: 'var(--cds-spacing-03) var(--cds-spacing-05)' }}>
+                  <UploadDetail valueId={upload.id} />
+                </div>
+              )}
+            </span>
+          ))}
+        </StructuredListBody>
+      </StructuredListWrapper>
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        pageSizes={[10, 25, 50, 100]}
+        totalItems={uploads.length < pageSize ? offset + uploads.length : offset + pageSize + 1}
+        onChange={({ page: newPage, pageSize: newSize }: { page: number; pageSize: number }) => {
+          setPage(newPage);
+          setPageSize(newSize);
+        }}
+      />
+    </>
+  );
+};
+
 const GraphVisualizer = ({ groupId }: { groupId: number }) => {
   const { data: nodeGroup } = useSuspenseQuery(byIdOptions({ path: { id: groupId } }));
   return <NodeGraphVisualizer nodeGroup={nodeGroup} />;
 };
 
-const TAB_ANCHORS = ['nodes', 'graph'];
+const TAB_ANCHORS = ['uploads', 'nodes', 'graph'];
 
 const FolderContent = ({ folderId }: { folderId: number }) => {
   const { data: folders } = useSuspenseQuery(listFoldersOptions());
@@ -75,10 +174,18 @@ const FolderContent = ({ folderId }: { folderId: number }) => {
   return (
     <Tabs selectedIndex={selectedIndex} onChange={onTabChange}>
       <TabList aria-label="Folder tabs">
+        <Tab>Uploads</Tab>
         <Tab>Nodes</Tab>
         <Tab>Graph</Tab>
       </TabList>
       <TabPanels>
+        <TabPanel>
+          {folder.name ? (
+            <UploadsTab folderName={folder.name} />
+          ) : (
+            <p>Folder name not available</p>
+          )}
+        </TabPanel>
         <TabPanel>
           {folder.groupId != null ? (
             <ErrorBoundary fallback={<InlineLoading status="error" description="Failed to load nodes" />}>

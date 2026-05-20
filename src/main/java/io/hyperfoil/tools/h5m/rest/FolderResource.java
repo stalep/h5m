@@ -2,7 +2,10 @@ package io.hyperfoil.tools.h5m.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.hyperfoil.tools.h5m.api.Folder;
+import io.hyperfoil.tools.h5m.api.FolderSummary;
+import io.hyperfoil.tools.h5m.api.UploadSummary;
 import io.hyperfoil.tools.h5m.api.svc.FolderServiceInterface;
+import io.hyperfoil.tools.h5m.svc.FolderService;
 import io.hyperfoil.tools.yaup.json.Json;
 import io.quarkus.security.Authenticated;
 import jakarta.annotation.security.PermitAll;
@@ -26,11 +29,22 @@ public class FolderResource {
     @Inject
     FolderServiceInterface folderService;
 
+    @Inject
+    FolderService folderServiceImpl;
+
     @GET
     @PermitAll
     @Operation(description = "Retrieve the list of all the folders")
     public @NotNull List<Folder> listFolders() {
         return folderService.list();
+    }
+
+    @GET
+    @Path("dashboard")
+    @PermitAll
+    @Operation(description = "Get dashboard summaries for all folders")
+    public List<FolderSummary> getDashboardSummaries() {
+        return folderServiceImpl.getDashboardSummaries();
     }
 
     @GET
@@ -82,6 +96,17 @@ public class FolderResource {
     @Operation(description = "Recalculate all values in a folder")
     public void recalculate(@PathParam("name") String name) {
         folderService.recalculate(name);
+    }
+
+    @GET
+    @Path("{name}/uploads")
+    @PermitAll
+    @Operation(description = "List uploads for a folder, most recent first")
+    public List<UploadSummary> getUploads(
+            @PathParam("name") String name,
+            @QueryParam("limit") @DefaultValue("25") @Parameter(description = "Max results") int limit,
+            @QueryParam("offset") @DefaultValue("0") @Parameter(description = "Results to skip") int offset) {
+        return folderServiceImpl.getUploads(name, limit, offset);
     }
 
     @GET

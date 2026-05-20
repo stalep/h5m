@@ -36,6 +36,13 @@ vi.mock('@client/@tanstack/react-query.gen.ts', () => ({
     queryKey: ['byId'],
     queryFn: () => mockNodeGroup,
   }),
+  getUploadsOptions: () => ({
+    queryKey: ['uploads'],
+    queryFn: () => [
+      { id: 1, createdAt: '2026-05-15T14:30:00', valueCount: 24 },
+      { id: 2, createdAt: '2026-05-15T14:25:00', valueCount: 24 },
+    ],
+  }),
 }));
 
 const { FolderPage } = await import('@app/pages/FolderPage');
@@ -48,6 +55,10 @@ function renderFolderPage(folderId: string) {
   });
   queryClient.setQueryData(['listFolders'], mockFolders);
   queryClient.setQueryData(['byId'], mockNodeGroup);
+  queryClient.setQueryData(['uploads'], [
+    { id: 1, createdAt: '2026-05-15T14:30:00', valueCount: 24 },
+    { id: 2, createdAt: '2026-05-15T14:25:00', valueCount: 24 },
+  ]);
 
   return render(
     <QueryClientProvider client={queryClient}>
@@ -61,10 +72,11 @@ function renderFolderPage(folderId: string) {
 }
 
 describe('<FolderPage />', () => {
-  it('renders tabs for nodes and graph', async () => {
+  it('renders all three tabs', async () => {
     renderFolderPage('1');
 
     await waitFor(() => {
+      expect(screen.getByText('Uploads')).toBeDefined();
       expect(screen.getByText('Nodes')).toBeDefined();
       expect(screen.getByText('Graph')).toBeDefined();
     });
@@ -72,12 +84,12 @@ describe('<FolderPage />', () => {
     cleanup();
   });
 
-  it('shows node data in the nodes tab', async () => {
+  it('shows uploads tab by default', async () => {
     renderFolderPage('1');
 
     await waitFor(() => {
-      expect(screen.getByText('cpu')).toBeDefined();
-      expect(screen.getByText('mem')).toBeDefined();
+      // Uploads tab should be the default/first tab
+      expect(screen.getByText('Uploads')).toBeDefined();
     });
 
     cleanup();

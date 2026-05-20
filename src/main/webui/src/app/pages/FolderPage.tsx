@@ -1,10 +1,18 @@
 import type { Node as ApiNode, UploadSummary } from '@client/types.gen.ts';
 
+import type { CreateNodeRequest } from '@app/components/ExpressionTester';
+
+import { ExpressionTester } from '@app/components/ExpressionTester';
 import { NodeGraphVisualizer } from '@app/components/NodeGraphVisualizer';
 import {
+  Button,
   CodeSnippet,
+  ComposedModal,
   ErrorBoundary,
   InlineLoading,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
   Pagination,
   SkeletonText,
   StructuredListBody,
@@ -18,6 +26,7 @@ import {
   TabPanels,
   Tabs,
   Tag,
+  TextInput,
 } from '@carbon/react';
 import { byIdOptions, getUploadsOptions, getValueDataOptions, listFoldersOptions } from '@client/@tanstack/react-query.gen.ts';
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
@@ -66,24 +75,146 @@ const NodesTab = ({ groupId }: { groupId: number }) => {
   );
 };
 
-const UploadDetail = ({ valueId }: { valueId: number }) => {
+const NODE_TYPE_MAP: Record<string, string> = {
+  jq: 'JQ',
+  js: 'JS',
+};
+
+const CreateNodeModal = ({
+  open,
+  request,
+  folderId,
+  onClose,
+}: {
+  open: boolean;
+  request: CreateNodeRequest | null;
+  folderId: number;
+  onClose: () => void;
+}) => {
+  const [nodeName, setNodeName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const handleCreate = useCallback(async () => {
+    if (!request || !nodeName.trim()) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const nodeType = NODE_TYPE_MAP[request.type] ?? 'JQ';
+      const params = new URLSearchParams({
+        name: nodeName,
+        groupId: String(folderId),
+        type: nodeType,
+        operation: request.expression,
+      });
+      const response = await fetch(`/api/node?${params.toString()}`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        setError(text || `HTTP ${String(response.status)}`);
+      } else {
+        setSuccess(true);
+        setTimeout(() => {
+          onClose();
+          setSuccess(false);
+          setNodeName('');
+        }, 1000);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create node');
+    } finally {
+      setCreating(false);
+    }
+  }, [request, nodeName, folderId, onClose]);
+
+  return (
+    <ComposedModal open={open} onClose={() => { onClose(); setNodeName(''); setError(null); setSuccess(false); }}>
+      <ModalHeader title="Create Node" />
+      <ModalBody>
+        <TextInput
+          id="node-name"
+          labelText="Node name"
+          placeholder="e.g., cpu, throughput, version"
+          value={nodeName}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNodeName(e.target.value)}
+          disabled={creating || success}
+        />
+        {request && (
+          <div style={{ marginTop: 'var(--cds-spacing-05)' }}>
+            <p style={{ fontSize: '0.75rem', opacity: 0.7 }}>Type: <strong>{request.type}</strong></p>
+            <p style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: 'var(--cds-spacing-02)' }}>Expression:</p>
+            <CodeSnippet type="single">{request.expression}</CodeSnippet>
+          </div>
+        )}
+        {error && (
+          <div style={{ color: 'var(--cds-support-error)', marginTop: 'var(--cds-spacing-03)' }}>
+            {error}
+          </div>
+        )}
+        {success && (
+          <div style={{ color: 'var(--cds-support-success)', marginTop: 'var(--cds-spacing-03)' }}>
+            Node created successfully!
+          </div>
+        )}
+      </ModalBody>
+      <ModalFooter>
+        <Button kind="secondary" onClick={() => { onClose(); setNodeName(''); setError(null); }}>Cancel</Button>
+        <Button
+          kind="primary"
+          onClick={() => void handleCreate()}
+          disabled={creating || !nodeName.trim() || success}
+        >
+          {creating ? 'Creating...' : 'Create'}
+        </Button>
+      </ModalFooter>
+    </ComposedModal>
+  );
+};
+
+const UploadDetail = ({ valueId, folderId }: { valueId: number; folderId: number }) => {
   const { data, isLoading, isError } = useQuery(
     getValueDataOptions({ path: { id: valueId } }),
   );
+  const [showTester, setShowTester] = useState(false);
+  const [createRequest, setCreateRequest] = useState<CreateNodeRequest | null>(null);
 
   if (isLoading) return <SkeletonText paragraph={true} lineCount={3} />;
   if (isError) return <InlineLoading status="error" description="Failed to load data" />;
 
   return (
-    <div style={{ padding: 'var(--cds-spacing-03)', maxHeight: '400px', overflow: 'auto' }}>
-      <CodeSnippet type="multi" wrapText>
-        {JSON.stringify(data, null, 2)}
-      </CodeSnippet>
+    <div style={{ padding: 'var(--cds-spacing-03)' }}>
+      <div style={{ display: 'flex', gap: 'var(--cds-spacing-03)', marginBottom: 'var(--cds-spacing-03)' }}>
+        <Tag size="sm" type={showTester ? 'blue' : 'gray'}
+          onClick={() => setShowTester(!showTester)}
+          style={{ cursor: 'pointer' }}>
+          {showTester ? 'Hide expression tester' : 'Try expression'}
+        </Tag>
+      </div>
+      {showTester && (
+        <ExpressionTester
+          valueId={valueId}
+          data={data}
+          onCreateNode={(req) => setCreateRequest(req)}
+        />
+      )}
+      <CreateNodeModal
+        open={createRequest != null}
+        request={createRequest}
+        folderId={folderId}
+        onClose={() => setCreateRequest(null)}
+      />
+      <div style={{ maxHeight: '400px', overflow: 'auto' }}>
+        <CodeSnippet type="multi" wrapText>
+          {JSON.stringify(data, null, 2)}
+        </CodeSnippet>
+      </div>
     </div>
   );
 };
 
-const UploadsTab = ({ folderName }: { folderName: string }) => {
+const UploadsTab = ({ folderName, folderId }: { folderName: string; folderId: number }) => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -131,7 +262,7 @@ const UploadsTab = ({ folderName }: { folderName: string }) => {
               </StructuredListRow>
               {expandedId === upload.id && upload.id != null && (
                 <div style={{ padding: 'var(--cds-spacing-03) var(--cds-spacing-05)' }}>
-                  <UploadDetail valueId={upload.id} />
+                  <UploadDetail valueId={upload.id} folderId={folderId} />
                 </div>
               )}
             </span>
@@ -181,7 +312,7 @@ const FolderContent = ({ folderId }: { folderId: number }) => {
       <TabPanels>
         <TabPanel>
           {folder.name ? (
-            <UploadsTab folderName={folder.name} />
+            <UploadsTab folderName={folder.name} folderId={folder.groupId ?? 0} />
           ) : (
             <p>Folder name not available</p>
           )}

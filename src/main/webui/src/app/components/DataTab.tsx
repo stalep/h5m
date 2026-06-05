@@ -144,7 +144,12 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
           New View
         </Button>
       </div>
-      {selectedView && (
+      {selectedView && (!selectedView.components || selectedView.components.length === 0) && (
+        <p style={{ opacity: 0.7 }}>
+          This view has no columns configured. Click <strong>Configure</strong> to select which nodes to display.
+        </p>
+      )}
+      {selectedView && selectedView.components && selectedView.components.length > 0 && (
         <ViewDataTable folderName={folderName} view={selectedView} />
       )}
       <ErrorBoundary fallback={<InlineLoading status="error" description="Failed to load modal" />}>

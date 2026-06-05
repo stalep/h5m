@@ -2570,6 +2570,152 @@ public class NodeServiceTest extends FreshDb {
     }
 
     /**
+     * Verifies that allDomainValues does not accumulate across rootDomainValues
+     * iterations when a single upload produces multiple split items (multiple
+     * domain values per root). If allDomainValues leaks between iterations,
+     * the cleanup code would see domain values from a previous iteration's
+     * window and could incorrectly delete valid persisted changes.
+     *
+     * Scenario: Upload 4 roots with split producing one item each (domains 1-4).
+     * A change is detected after upload 2. Then upload a 5th root that produces
+     * TWO split items (domains 5 and 6). The rootDomainValues loop iterates
+     * twice for this upload. If allDomainValues accumulates, iteration 2 sees
+     * domain values from iteration 1 in its cleanup scope.
+     */
+    @Test
+    public void test_calculaterelativediff_allDomainValues_not_accumulated_across_iterations() throws Exception {
+        tm.begin();
+
+        NodeEntity rootNode = new RootNode();
+        rootNode.persist();
+        SplitNode splitNode = new SplitNode("split", "split", List.of(rootNode));
+        splitNode.persist();
+        NodeEntity rangeNode = new JqNode("range", ".y", splitNode);
+        rangeNode.persist();
+        NodeEntity domainNode = new JqNode("domain", ".domain", splitNode);
+        domainNode.persist();
+        NodeEntity fingerprintNode = new JqNode("fingerprint", ".fingerprint", splitNode);
+        fingerprintNode.persist();
+
+        RelativeDifference relDiff = new RelativeDifference("relativediff", "{}");
+        relDiff.setNodes(fingerprintNode, splitNode, rangeNode, domainNode);
+        relDiff.setWindow(1);
+        relDiff.setMinPrevious(1);
+        relDiff.setFilter("mean");
+        relDiff.persist();
+
+        ObjectMapper mapper = new ObjectMapper();
+
+        // Upload 1: domain=4, range=100
+        ValueEntity root1 = new ValueEntity(null, rootNode, mapper.readTree(
+                """
+                { "split": [ { "fingerprint": "alpha", "domain": 4, "range": 100 } ] }
+                """));
+        root1.persist();
+        ValueEntity split1 = new ValueEntity(null, splitNode, root1.data.get("split").get(0), List.of(root1));
+        split1.persist();
+        new ValueEntity(null, domainNode, split1.data.get("domain"), List.of(split1)).persist();
+        new ValueEntity(null, rangeNode, split1.data.get("range"), List.of(split1)).persist();
+        new ValueEntity(null, fingerprintNode, split1.data.get("fingerprint"), List.of(split1)).persist();
+
+        tm.commit();
+
+        List<ValueEntity> changes1 = nodeService.calculateRelativeDifferenceValues(relDiff, root1, 0);
+        assertEquals(0, changes1.size(), "Upload 1: single sample, no changes expected");
+
+        // Upload 2: domain=3, range=100 (same range, no change expected)
+        tm.begin();
+        ValueEntity root2 = new ValueEntity(null, rootNode, mapper.readTree(
+                """
+                { "split": [ { "fingerprint": "alpha", "domain": 3, "range": 100 } ] }
+                """));
+        root2.persist();
+        ValueEntity split2 = new ValueEntity(null, splitNode, root2.data.get("split").get(0), List.of(root2));
+        split2.persist();
+        new ValueEntity(null, domainNode, split2.data.get("domain"), List.of(split2)).persist();
+        new ValueEntity(null, rangeNode, split2.data.get("range"), List.of(split2)).persist();
+        new ValueEntity(null, fingerprintNode, split2.data.get("fingerprint"), List.of(split2)).persist();
+        tm.commit();
+
+        List<ValueEntity> changes2 = nodeService.calculateRelativeDifferenceValues(relDiff, root2, 0);
+        assertEquals(0, changes2.size(), "Upload 2: same range value, no change expected");
+
+        // Upload 3: domain=2, range=200 (big change, should detect)
+        tm.begin();
+        ValueEntity root3 = new ValueEntity(null, rootNode, mapper.readTree(
+                """
+                { "split": [ { "fingerprint": "alpha", "domain": 2, "range": 200 } ] }
+                """));
+        root3.persist();
+        ValueEntity split3 = new ValueEntity(null, splitNode, root3.data.get("split").get(0), List.of(root3));
+        split3.persist();
+        new ValueEntity(null, domainNode, split3.data.get("domain"), List.of(split3)).persist();
+        new ValueEntity(null, rangeNode, split3.data.get("range"), List.of(split3)).persist();
+        new ValueEntity(null, fingerprintNode, split3.data.get("fingerprint"), List.of(split3)).persist();
+        tm.commit();
+
+        List<ValueEntity> changes3 = nodeService.calculateRelativeDifferenceValues(relDiff, root3, 0);
+        assertEquals(1, changes3.size(), "Upload 3: range doubled, should detect 1 change");
+
+        // Persist the change
+        tm.begin();
+        em.merge(changes3.get(0));
+        tm.commit();
+
+        // Upload 4: TWO split items in one root (domains 5 and 6, range=100)
+        // This forces rootDomainValues to have 2 entries, so the loop iterates twice.
+        // If allDomainValues accumulates across iterations, the cleanup in iteration 2
+        // will see domain values from iteration 1's window and could incorrectly
+        // delete the persisted change from upload 3.
+        tm.begin();
+        ValueEntity root4 = new ValueEntity(null, rootNode, mapper.readTree(
+                """
+                { "split": [
+                    { "fingerprint": "alpha", "domain": 5, "range": 100 },
+                    { "fingerprint": "alpha", "domain": 6, "range": 100 }
+                ] }
+                """));
+        root4.persist();
+        // Split item 1: domain=5
+        ValueEntity split4a = new ValueEntity(null, splitNode, root4.data.get("split").get(0), List.of(root4));
+        split4a.persist();
+        new ValueEntity(null, domainNode, split4a.data.get("domain"), List.of(split4a)).persist();
+        new ValueEntity(null, rangeNode, split4a.data.get("range"), List.of(split4a)).persist();
+        new ValueEntity(null, fingerprintNode, split4a.data.get("fingerprint"), List.of(split4a)).persist();
+        // Split item 2: domain=6
+        ValueEntity split4b = new ValueEntity(null, splitNode, root4.data.get("split").get(1), List.of(root4));
+        split4b.persist();
+        new ValueEntity(null, domainNode, split4b.data.get("domain"), List.of(split4b)).persist();
+        new ValueEntity(null, rangeNode, split4b.data.get("range"), List.of(split4b)).persist();
+        new ValueEntity(null, fingerprintNode, split4b.data.get("fingerprint"), List.of(split4b)).persist();
+        tm.commit();
+
+        List<ValueEntity> changes4 = nodeService.calculateRelativeDifferenceValues(relDiff, root4, 0);
+
+        // The change from upload 3 should still be persisted — the multi-split
+        // upload should NOT have deleted it due to allDomainValues accumulation
+        tm.begin();
+        List<ValueEntity> persistedChanges = valueService.getValues(relDiff);
+        assertEquals(1, persistedChanges.size(),
+                "Exactly 1 persisted change (from upload 3) should remain. " +
+                "If allDomainValues accumulates across rootDomainValues iterations, " +
+                "domain values from iteration 1 leak into iteration 2's cleanup scope and " +
+                "could cause incorrect deletion. Persisted changes: " + persistedChanges);
+
+        // Verify the persisted change has the expected content from upload 3
+        ValueEntity persistedChange = persistedChanges.get(0);
+        JsonNode changeData = persistedChange.data;
+        assertNotNull(changeData, "Persisted change should have data");
+        assertNotNull(changeData.get("domainvalue"), "Change should have domainvalue");
+        assertNotNull(changeData.get("ratio"), "Change should have ratio");
+        assertNotNull(changeData.get("previous"), "Change should have previous");
+        assertNotNull(changeData.get("last"), "Change should have last");
+        assertEquals(3, changeData.get("domainvalue").asInt(),
+                "Persisted change should be for domain=3 (where the range jumped from 100 to 200)");
+        tm.commit();
+    }
+
+    /**
      * Verify that the upload -> work queue -> value computation pipeline
      * works correctly with CascadeType.PERSIST only (no MERGE) on
      * NodeEntity.sources and Work.activeNodes.

@@ -69,7 +69,7 @@ const FixedOffsetEdge = ({ sourceX, sourceY, targetX, targetY, sourcePosition, t
   return <BaseEdge path={path} markerStart={markerStart} markerEnd={markerEnd} style={style} />;
 };
 
-const PipelineNode = ({ data }: { data: { name: string; operation?: string; nodeType?: string; sourceIds?: string[]; dimmed?: boolean } }) => {
+const PipelineNode = ({ data }: { data: { name: string; operation?: string; nodeType?: string; sourceIds?: string[]; dimmed?: boolean; selected?: boolean } }) => {
   const color = nodeColor(data.nodeType);
   const Icon = (data.nodeType ? TYPE_ICONS[data.nodeType] : undefined) ?? FlowData;
   return (
@@ -80,7 +80,7 @@ const PipelineNode = ({ data }: { data: { name: string; operation?: string; node
         padding: '6px 12px',
         fontSize: 10,
         textAlign: 'center',
-        border: `1px solid ${color}`,
+        border: data.selected ? `2px solid ${blue50}` : `1px solid ${color}`,
         borderRadius: 10,
         background: gray90,
         display: 'flex',
@@ -88,7 +88,8 @@ const PipelineNode = ({ data }: { data: { name: string; operation?: string; node
         justifyContent: 'center',
         position: 'relative',
         opacity: data.dimmed ? 0.2 : 1,
-        transition: 'opacity 1s',
+        transition: 'opacity 1s, border 0.2s',
+        cursor: 'pointer',
       }}
     >
       {data.nodeType !== 'ROOT' && <Handle type="target" position={Position.Left} />}
@@ -201,6 +202,7 @@ const HighlightManager = ({ selectedId }: { selectedId?: string }) => {
         data: {
           ...n.data,
           dimmed: selected !== undefined && !relatedIds.has(n.id),
+          selected: n.id === selectedId,
         },
       })),
     );
@@ -219,16 +221,31 @@ const HighlightManager = ({ selectedId }: { selectedId?: string }) => {
   return null;
 };
 
-export const NodeGraphVisualizer = ({ nodeGroup }: { nodeGroup: NodeGroup }) => {
+export const NodeGraphVisualizer = ({
+  nodeGroup,
+  selectedNodeId,
+  onNodeSelect,
+}: {
+  nodeGroup: NodeGroup;
+  /** Externally controlled selected node ID */
+  selectedNodeId?: string;
+  /** Called when a node is clicked (toggle) or pane is clicked (deselect) */
+  onNodeSelect?: (nodeId: string | undefined) => void;
+}) => {
   const { nodes, edges } = useMemo(() => buildGraph(nodeGroup), [nodeGroup]);
-  const [selectedId, setSelectedId] = useState<string | undefined>();
+  // Use external selectedId if provided, otherwise manage internally
+  const [internalSelectedId, setInternalSelectedId] = useState<string | undefined>();
+  const selectedId = selectedNodeId ?? internalSelectedId;
 
   const onNodeClick = useCallback((_: unknown, node: FlowNode) => {
-    setSelectedId((prev) => (prev === node.id ? undefined : node.id));
-  }, []);
+    const newId = selectedId === node.id ? undefined : node.id;
+    setInternalSelectedId(newId);
+    onNodeSelect?.(newId);
+  }, [selectedId, onNodeSelect]);
   const onPaneClick = useCallback(() => {
-    setSelectedId(undefined);
-  }, []);
+    setInternalSelectedId(undefined);
+    onNodeSelect?.(undefined);
+  }, [onNodeSelect]);
 
   if (nodes.length === 0) {
     return <p>No nodes defined</p>;

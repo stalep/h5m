@@ -46,9 +46,6 @@ export const CreateNodeModal = ({ open, onClose, groupId, request, parentNodeId 
         type: nodeType,
         operation: request.expression,
       });
-      if (parentNodeId != null) {
-        params.append('sources', String(parentNodeId));
-      }
       const response = await fetch(`/api/node?${params.toString()}`, {
         method: 'POST',
       });

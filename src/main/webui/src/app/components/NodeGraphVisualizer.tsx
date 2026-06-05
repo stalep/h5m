@@ -254,8 +254,8 @@ export const NodeGraphVisualizer = ({
   return (
     <div style={{ height: 'calc(100vh - 200px)' }}>
       <ReactFlow
-        defaultNodes={nodes}
-        defaultEdges={edges}
+        nodes={nodes}
+        edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}

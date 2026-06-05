@@ -179,8 +179,11 @@ export const ExpressionTester = ({ valueId, data, onCreateNode }: ExpressionTest
           )}
           {result && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--cds-spacing-02)' }}>
-                <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>Result</div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: 'var(--cds-spacing-02)' }}>Result</div>
+              <CodeSnippet type="multi" wrapText>
+                {result}
+              </CodeSnippet>
+              <div style={{ marginTop: 'var(--cds-spacing-03)' }}>
                 <Button
                   size="sm"
                   kind="tertiary"
@@ -190,9 +193,6 @@ export const ExpressionTester = ({ valueId, data, onCreateNode }: ExpressionTest
                   Create node from this expression
                 </Button>
               </div>
-              <CodeSnippet type="multi" wrapText>
-                {result}
-              </CodeSnippet>
             </div>
           )}
         </Column>

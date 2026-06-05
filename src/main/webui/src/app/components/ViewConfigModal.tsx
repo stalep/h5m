@@ -62,6 +62,8 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
       nodeId: n.id!,
     }));
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const createMutation = useMutation({
     mutationFn: (data: View) =>
       ViewService.createView({
@@ -69,8 +71,12 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
         body: data,
       }),
     onSuccess: () => {
+      setSaveError(null);
       queryClient.invalidateQueries({ queryKey: ['getViews'] });
       onClose();
+    },
+    onError: (e: Error) => {
+      setSaveError(e.message ?? 'Failed to create view');
     },
   });
 
@@ -81,8 +87,12 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
         body: data,
       }),
     onSuccess: () => {
+      setSaveError(null);
       queryClient.invalidateQueries({ queryKey: ['getViews'] });
       onClose();
+    },
+    onError: (e: Error) => {
+      setSaveError(e.message ?? 'Failed to update view');
     },
   });
 
@@ -147,6 +157,11 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
             setSelectedNodes(selectedItems);
           }}
         />
+        {saveError && (
+          <div style={{ color: 'var(--cds-support-error)', marginTop: 'var(--cds-spacing-03)' }}>
+            {saveError}
+          </div>
+        )}
       </ModalBody>
       <ModalFooter>
         {isEditing && !isDefault && (

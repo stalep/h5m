@@ -72,8 +72,11 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
       }),
     onSuccess: () => {
       setSaveError(null);
-      void queryClient.invalidateQueries({ queryKey: ['getViews'] });
-      void queryClient.invalidateQueries({ queryKey: ['getViewData'] });
+      void queryClient.refetchQueries({ predicate: (q) => {
+        const key = q.queryKey[0];
+        return typeof key === 'object' && key !== null && '_id' in key &&
+          (key._id === 'getViews' || key._id === 'getViewData');
+      }});
       onClose();
     },
     onError: (e: Error) => {
@@ -89,8 +92,11 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
       }),
     onSuccess: () => {
       setSaveError(null);
-      void queryClient.invalidateQueries({ queryKey: ['getViews'] });
-      void queryClient.invalidateQueries({ queryKey: ['getViewData'] });
+      void queryClient.refetchQueries({ predicate: (q) => {
+        const key = q.queryKey[0];
+        return typeof key === 'object' && key !== null && '_id' in key &&
+          (key._id === 'getViews' || key._id === 'getViewData');
+      }});
       onClose();
     },
     onError: (e: Error) => {
@@ -104,8 +110,11 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
         path: { name: folderName, viewId: view!.id! },
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['getViews'] });
-      void queryClient.invalidateQueries({ queryKey: ['getViewData'] });
+      void queryClient.refetchQueries({ predicate: (q) => {
+        const key = q.queryKey[0];
+        return typeof key === 'object' && key !== null && '_id' in key &&
+          (key._id === 'getViews' || key._id === 'getViewData');
+      }});
       onClose();
     },
   });

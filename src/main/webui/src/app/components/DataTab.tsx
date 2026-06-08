@@ -90,6 +90,7 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
   const [selectedViewId, setSelectedViewId] = useState<number | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [editingView, setEditingView] = useState<View | null>(null);
+  const [modalKey, setModalKey] = useState(0);
 
   const selectedView = useMemo((): View | null => {
     if (!views || views.length === 0) return null;
@@ -133,9 +134,9 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
           kind="ghost"
           size="md"
           onClick={() => {
-            // Re-read the latest view data from the query result
             const latestView = views?.find((v: View) => v.id === selectedView?.id) ?? selectedView;
             setEditingView(latestView);
+            setModalKey((k) => k + 1);
             setConfigModalOpen(true);
           }}
         >
@@ -144,7 +145,7 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
         <Button
           kind="ghost"
           size="md"
-          onClick={() => { setEditingView(null); setConfigModalOpen(true); }}
+          onClick={() => { setEditingView(null); setModalKey((k) => k + 1); setConfigModalOpen(true); }}
         >
           New View
         </Button>
@@ -164,7 +165,7 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
       <ErrorBoundary fallback={<InlineLoading status="error" description="Failed to load modal" />}>
         <Suspense fallback={<SkeletonText paragraph={true} lineCount={3} />}>
           <ViewConfigModal
-            key={`modal-${String(editingView?.id ?? 'new')}-${String(configModalOpen)}`}
+            key={modalKey}
             open={configModalOpen}
             onClose={() => setConfigModalOpen(false)}
             folderName={folderName}

@@ -132,7 +132,12 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
         <Button
           kind="ghost"
           size="md"
-          onClick={() => { setEditingView(selectedView); setConfigModalOpen(true); }}
+          onClick={() => {
+            // Re-read the latest view data from the query result
+            const latestView = views?.find((v: View) => v.id === selectedView?.id) ?? selectedView;
+            setEditingView(latestView);
+            setConfigModalOpen(true);
+          }}
         >
           Configure
         </Button>
@@ -150,11 +155,16 @@ export const DataTab = ({ folderName, groupId }: { folderName: string; groupId: 
         </p>
       )}
       {selectedView && selectedView.components && selectedView.components.length > 0 && (
-        <ViewDataTable folderName={folderName} view={selectedView} />
+        <ViewDataTable
+          key={`${String(selectedView.id)}-${String(selectedView.components?.length ?? 0)}-${selectedView.components?.map(c => String(c.nodeId)).join(',') ?? ''}`}
+          folderName={folderName}
+          view={selectedView}
+        />
       )}
       <ErrorBoundary fallback={<InlineLoading status="error" description="Failed to load modal" />}>
         <Suspense fallback={<SkeletonText paragraph={true} lineCount={3} />}>
           <ViewConfigModal
+            key={`modal-${String(editingView?.id ?? 'new')}-${String(configModalOpen)}`}
             open={configModalOpen}
             onClose={() => setConfigModalOpen(false)}
             folderName={folderName}

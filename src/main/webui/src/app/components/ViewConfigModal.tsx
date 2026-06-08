@@ -12,7 +12,7 @@ import {
 import { byIdOptions } from '@client/@tanstack/react-query.gen.ts';
 import { ViewService } from '@client/sdk.gen.ts';
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 interface ViewConfigModalProps {
   open: boolean;
@@ -34,26 +34,8 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
   const isEditing = view != null && view.id != null;
   const isDefault = view?.name === 'Default';
 
-  const [viewName, setViewName] = useState(view?.name ?? '');
-  const [selectedNodes, setSelectedNodes] = useState<NodeItem[]>([]);
-
-  // Initialize from existing view when editing
-  useEffect(() => {
-    if (view) {
-      setViewName(view.name);
-      const items = (view.components ?? []).map((c: ViewComponent) => ({
-        id: String(c.nodeId),
-        text: c.headerName ?? c.nodeName ?? '',
-        nodeId: c.nodeId!,
-      }));
-      setSelectedNodes(items);
-    } else {
-      setViewName('');
-      setSelectedNodes([]);
-    }
-  }, [view]);
-
   // Available nodes for the multi-select (exclude detection nodes)
+  // Built once and stable so FilterableMultiSelect can match by reference
   const availableNodes: NodeItem[] = (nodeGroup.sources ?? [])
     .filter((n: ApiNode) => !['FIXED_THRESHOLD', 'RELATIVE_DIFFERENCE', 'EDIVISIVE'].includes(n.type ?? ''))
     .map((n: ApiNode) => ({
@@ -61,6 +43,16 @@ export const ViewConfigModal = ({ open, onClose, folderName, groupId, view }: Vi
       text: n.name ?? '',
       nodeId: n.id!,
     }));
+
+  const [viewName, setViewName] = useState(view?.name ?? '');
+  // Initialize selectedNodes from the view's components by finding
+  // matching items in availableNodes (same object references required
+  // by Carbon's FilterableMultiSelect)
+  const [selectedNodes, setSelectedNodes] = useState<NodeItem[]>(() => {
+    if (!view?.components) return [];
+    const componentNodeIds = new Set(view.components.map((c: ViewComponent) => String(c.nodeId)));
+    return availableNodes.filter((n) => componentNodeIds.has(n.id));
+  });
 
   const [saveError, setSaveError] = useState<string | null>(null);
 

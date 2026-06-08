@@ -1,8 +1,10 @@
 import type { Node as ApiNode } from '@client/types.gen.ts';
 
 import { DataTab } from '@app/components/DataTab';
+import { NodeDetailPanel } from '@app/components/NodeDetailPanel';
 import { NodeGraphVisualizer } from '@app/components/NodeGraphVisualizer';
 import {
+  Button,
   ErrorBoundary,
   InlineLoading,
   SkeletonText,
@@ -18,9 +20,10 @@ import {
   Tabs,
   Tag,
 } from '@carbon/react';
+import { Add } from '@carbon/icons-react';
 import { byIdOptions, listFoldersOptions } from '@client/@tanstack/react-query.gen.ts';
 import { useSuspenseQuery } from '@tanstack/react-query';
-import { Suspense, useCallback } from 'react';
+import { Suspense, useCallback, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 const NodesTab = ({ groupId }: { groupId: number }) => {
@@ -54,9 +57,73 @@ const NodesTab = ({ groupId }: { groupId: number }) => {
   );
 };
 
+/** Find a node by its string ID in the full node group tree */
+function findNodeInGroup(nodeGroup: { root?: ApiNode; sources?: ApiNode[] }, nodeId: string): ApiNode | undefined {
+  const id = Number(nodeId);
+  const search = (node: ApiNode | undefined): ApiNode | undefined => {
+    if (!node) return undefined;
+    if (node.id === id) return node;
+    for (const src of node.sources ?? []) {
+      const found = search(src);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  let found = search(nodeGroup.root);
+  if (!found) {
+    for (const src of nodeGroup.sources ?? []) {
+      found = search(src);
+      if (found) break;
+    }
+  }
+  return found;
+}
+
 const GraphVisualizer = ({ groupId }: { groupId: number }) => {
   const { data: nodeGroup } = useSuspenseQuery(byIdOptions({ path: { id: groupId } }));
-  return <NodeGraphVisualizer nodeGroup={nodeGroup} />;
+  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
+
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId) return undefined;
+    return findNodeInGroup(nodeGroup, selectedNodeId);
+  }, [selectedNodeId, nodeGroup]);
+
+  // Select the root node to open the panel with expression tester
+  const handleAddNode = useCallback(() => {
+    if (nodeGroup.root?.id != null) {
+      setSelectedNodeId(String(nodeGroup.root.id));
+    }
+  }, [nodeGroup]);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 'var(--cds-spacing-03) 0' }}>
+        <Button size="sm" kind="primary" renderIcon={Add} onClick={handleAddNode}>
+          Add Node
+        </Button>
+      </div>
+      <div style={{ display: 'flex', height: 'calc(100vh - 240px)' }}>
+        <div style={{ flex: selectedNode ? '0 0 65%' : '1 1 100%', transition: 'flex 0.3s', minWidth: 0 }}>
+          <NodeGraphVisualizer
+            nodeGroup={nodeGroup}
+            selectedNodeId={selectedNodeId}
+            onNodeSelect={setSelectedNodeId}
+          />
+        </div>
+        {selectedNode && (
+          <div style={{ flex: '0 0 35%', minWidth: '300px', maxWidth: '500px' }}>
+            <NodeDetailPanel
+              key={selectedNode.id}
+              node={selectedNode}
+              nodeGroup={nodeGroup}
+              groupId={groupId}
+              onClose={() => setSelectedNodeId(undefined)}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 const TAB_ANCHORS = ['data', 'nodes', 'graph'];

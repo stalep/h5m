@@ -163,9 +163,11 @@ export const NodeDetailPanel = ({ node, nodeGroup, groupId, onClose }: NodeDetai
       <Accordion>
         {node.operation && (
           <AccordionItem title="Operation" open>
-            <CodeSnippet type="multi" wrapText maxCollapsedNumberOfRows={8} maxExpandedNumberOfRows={40}>
-              {node.operation}
-            </CodeSnippet>
+            <div className="operation-snippet" style={{ margin: '0 calc(-1 * var(--cds-spacing-05))' }}>
+              <CodeSnippet type="multi" wrapText maxCollapsedNumberOfRows={8} maxExpandedNumberOfRows={40}>
+                {node.operation}
+              </CodeSnippet>
+            </div>
           </AccordionItem>
         )}
         <AccordionItem title={`Values${values ? ` (${String(values.length)})` : ''}`}>

@@ -1,3 +1,8 @@
 .cds--tooltip-content {
   max-width: none;
 }
+
+.operation-snippet .cds--snippet--multi {
+  max-width: 100%;
+  width: 100%;
+}

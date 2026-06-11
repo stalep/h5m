@@ -160,10 +160,10 @@ export const NodeDetailPanel = ({ node, nodeGroup, groupId, onClose }: NodeDetai
       )}
 
       {/* Operation & Values in collapsible sections */}
-      <Accordion>
+      <Accordion className="node-detail-accordion">
         {node.operation && (
           <AccordionItem title="Operation" open>
-            <div className="operation-snippet" style={{ margin: '0 calc(-1 * var(--cds-spacing-05))' }}>
+            <div className="operation-snippet">
               <CodeSnippet type="multi" wrapText maxCollapsedNumberOfRows={8} maxExpandedNumberOfRows={40}>
                 {node.operation}
               </CodeSnippet>

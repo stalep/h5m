@@ -6,3 +6,18 @@
   max-width: 100%;
   width: 100%;
 }
+
+.operation-snippet .cds--snippet-container {
+  max-width: 100%;
+}
+
+.operation-snippet pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Remove accordion content padding to give more room */
+.node-detail-accordion .cds--accordion__content {
+  padding-right: 0;
+  padding-left: 0;
+}

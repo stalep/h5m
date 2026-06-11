@@ -5,6 +5,8 @@ import { CreateNodeModal } from '@app/components/CreateNodeModal';
 import { ExpressionTester } from '@app/components/ExpressionTester';
 import { nodeColor } from '@app/components/NodeGraphVisualizer';
 import {
+  Accordion,
+  AccordionItem,
   Button,
   CodeSnippet,
   InlineLoading,
@@ -145,16 +147,6 @@ export const NodeDetailPanel = ({ node, nodeGroup, groupId, onClose }: NodeDetai
         <Button kind="ghost" size="sm" hasIconOnly renderIcon={Close} iconDescription="Close" onClick={onClose} />
       </div>
 
-      {/* Operation */}
-      {node.operation && (
-        <div style={{ marginBottom: 'var(--cds-spacing-05)' }}>
-          <div style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '4px' }}>Operation</div>
-          <CodeSnippet type="multi" wrapText maxCollapsedNumberOfRows={4} maxExpandedNumberOfRows={20}>
-            {node.operation}
-          </CodeSnippet>
-        </div>
-      )}
-
       {/* Sources */}
       {node.sources && node.sources.length > 0 && (
         <div style={{ marginBottom: 'var(--cds-spacing-05)' }}>
@@ -167,31 +159,37 @@ export const NodeDetailPanel = ({ node, nodeGroup, groupId, onClose }: NodeDetai
         </div>
       )}
 
-      {/* Values */}
-      <div style={{ marginBottom: 'var(--cds-spacing-05)' }}>
-        <div style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '4px' }}>
-          Values {values ? `(${String(values.length)})` : ''}
-        </div>
-        {valuesLoading && <SkeletonText paragraph={true} lineCount={2} />}
-        {values && values.length === 0 && <p style={{ fontSize: '0.875rem', opacity: 0.7 }}>No values</p>}
-        {values && values.length > 0 && (
-          <div style={{ maxHeight: '300px', overflow: 'auto' }}>
-            {values.slice(0, 10).map((v) => (
-              <div key={v.id} style={{ fontSize: '0.75rem', padding: '4px 0', borderBottom: '1px solid var(--cds-border-subtle)' }}>
-                <span style={{ opacity: 0.5 }}>#{String(v.id)}</span>{' '}
-                <span style={{ wordBreak: 'break-all' }}>
-                  {v.data != null ? (typeof v.data === 'object' ? JSON.stringify(v.data) : String(v.data)) : '—'}
-                </span>
-              </div>
-            ))}
-            {values.length > 10 && (
-              <div style={{ fontSize: '0.75rem', opacity: 0.5, padding: '4px 0' }}>
-                ...and {String(values.length - 10)} more
-              </div>
-            )}
-          </div>
+      {/* Operation & Values in collapsible sections */}
+      <Accordion>
+        {node.operation && (
+          <AccordionItem title="Operation" open>
+            <CodeSnippet type="multi" wrapText maxCollapsedNumberOfRows={8} maxExpandedNumberOfRows={40}>
+              {node.operation}
+            </CodeSnippet>
+          </AccordionItem>
         )}
-      </div>
+        <AccordionItem title={`Values${values ? ` (${String(values.length)})` : ''}`}>
+          {valuesLoading && <SkeletonText paragraph={true} lineCount={2} />}
+          {values && values.length === 0 && <p style={{ fontSize: '0.875rem', opacity: 0.7 }}>No values</p>}
+          {values && values.length > 0 && (
+            <div style={{ maxHeight: '400px', overflow: 'auto' }}>
+              {values.slice(0, 20).map((v) => (
+                <div key={v.id} style={{ fontSize: '0.75rem', padding: '4px 0', borderBottom: '1px solid var(--cds-border-subtle)' }}>
+                  <span style={{ opacity: 0.5 }}>#{String(v.id)}</span>
+                  <CodeSnippet type="single" feedback="Copied">
+                    {v.data != null ? (typeof v.data === 'object' ? JSON.stringify(v.data) : String(v.data)) : '—'}
+                  </CodeSnippet>
+                </div>
+              ))}
+              {values.length > 20 && (
+                <div style={{ fontSize: '0.75rem', opacity: 0.5, padding: '4px 0' }}>
+                  ...and {String(values.length - 20)} more
+                </div>
+              )}
+            </div>
+          )}
+        </AccordionItem>
+      </Accordion>
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: 'var(--cds-spacing-03)', marginBottom: 'var(--cds-spacing-05)' }}>

@@ -149,7 +149,9 @@ export const NodeDetailPanel = ({ node, nodeGroup, groupId, onClose }: NodeDetai
       {node.operation && (
         <div style={{ marginBottom: 'var(--cds-spacing-05)' }}>
           <div style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '4px' }}>Operation</div>
-          <CodeSnippet type="single">{node.operation}</CodeSnippet>
+          <CodeSnippet type="multi" wrapText maxCollapsedNumberOfRows={4} maxExpandedNumberOfRows={20}>
+            {node.operation}
+          </CodeSnippet>
         </div>
       )}
 
@@ -173,17 +175,18 @@ export const NodeDetailPanel = ({ node, nodeGroup, groupId, onClose }: NodeDetai
         {valuesLoading && <SkeletonText paragraph={true} lineCount={2} />}
         {values && values.length === 0 && <p style={{ fontSize: '0.875rem', opacity: 0.7 }}>No values</p>}
         {values && values.length > 0 && (
-          <div style={{ maxHeight: '150px', overflow: 'auto' }}>
-            {values.slice(0, 5).map((v) => (
-              <div key={v.id} style={{ fontSize: '0.75rem', padding: '2px 0', borderBottom: '1px solid var(--cds-border-subtle)' }}>
+          <div style={{ maxHeight: '300px', overflow: 'auto' }}>
+            {values.slice(0, 10).map((v) => (
+              <div key={v.id} style={{ fontSize: '0.75rem', padding: '4px 0', borderBottom: '1px solid var(--cds-border-subtle)' }}>
                 <span style={{ opacity: 0.5 }}>#{String(v.id)}</span>{' '}
-                {v.data != null ? (typeof v.data === 'object' ? JSON.stringify(v.data).substring(0, 80) : String(v.data)) : '—'}
-                {v.data != null && typeof v.data === 'object' && JSON.stringify(v.data).length > 80 ? '...' : ''}
+                <span style={{ wordBreak: 'break-all' }}>
+                  {v.data != null ? (typeof v.data === 'object' ? JSON.stringify(v.data) : String(v.data)) : '—'}
+                </span>
               </div>
             ))}
-            {values.length > 5 && (
+            {values.length > 10 && (
               <div style={{ fontSize: '0.75rem', opacity: 0.5, padding: '4px 0' }}>
-                ...and {String(values.length - 5)} more
+                ...and {String(values.length - 10)} more
               </div>
             )}
           </div>

@@ -300,7 +300,7 @@ public class VerifyLegacy implements Callable<Integer> {
         // Get h5m values per label, ordered by idx (which maps to dataset ordinal)
         @SuppressWarnings("unchecked")
         List<Object[]> h5mValues = em.createNativeQuery("""
-                SELECT n.name, v.idx, v.data::text
+                SELECT n.name, v.idx, convert_from(v.data, 'UTF-8')
                 FROM value v
                 JOIN node n ON v.node_id = n.id
                 JOIN node_group ng ON n.group_id = ng.id

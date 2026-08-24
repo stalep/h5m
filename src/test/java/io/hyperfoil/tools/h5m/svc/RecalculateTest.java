@@ -1316,4 +1316,99 @@ public class RecalculateTest extends FreshDb {
         assertNull(deleted, "Tracker for nonexistent node should be deleted during recovery");
         tm.commit();
     }
+
+    /**
+     * Test that AUTO ephemeral nodes whose children are KEEP are not nullified.
+     * <p>
+     * Pipeline: root → extractor (AUTO) → aggregator (KEEP) → detection (rd)
+     * <p>
+     * The extractor produces an array of values. The aggregator computes an
+     * average from that array. Without the fix (#285), the extractor's data
+     * is nullified because it has non-analysis children (the aggregator).
+     * On recalculation, the aggregator tries to recompute from null data
+     * and fails.
+     * <p>
+     * With the fix, the extractor is NOT treated as ephemeral because its
+     * non-analysis child (aggregator) is KEEP.
+     */
+    @Test
+    public void auto_ephemeral_preserves_data_when_child_is_keep() throws Exception {
+        tm.begin();
+        long folderId = folderService.create("ephemeral-keep-child-test").id();
+        FolderEntity folder = folderService.read(folderId);
+
+        // Extractor: extracts array of values — AUTO ephemeral (system decides)
+        JqNode extractor = new JqNode("extractor", ".values", folder.group.root);
+        extractor.group = folder.group;
+        extractor.ephemeral = EphemeralMode.AUTO;
+        extractor.persist();
+        folder.group.sources.add(extractor);
+
+        // Aggregator: computes average from extractor array — KEEP (final computed value)
+        JqNode aggregator = new JqNode("aggregator", "add / length", extractor);
+        aggregator.group = folder.group;
+        aggregator.ephemeral = EphemeralMode.KEEP;
+        aggregator.persist();
+        folder.group.sources.add(aggregator);
+
+        folder.group.persist();
+        long extractorId = extractor.id;
+        long aggregatorId = aggregator.id;
+        tm.commit();
+
+        // Upload data with an array of values
+        long uploadId = valueService.createRootValue(folderId,
+                JqValues.parse("{\"values\": [10, 20, 30]}"));
+        // Get tracker BEFORE awaiting — the afterCleanup callback removes it
+        // from byRootValueId, so getByRootValueId returns null after completion.
+        ProcessingService.ActivityTracker tracker = processingService.getByRootValueId(uploadId);
+        processingService.awaitIngestion(uploadId, 30, TimeUnit.SECONDS);
+        if (tracker != null && tracker.afterCleanup != null) {
+            tracker.afterCleanup.get(30, TimeUnit.SECONDS);
+        }
+
+        // Verify: extractor data should be PRESERVED (not nullified)
+        // because its child (aggregator) is KEEP.
+        // Uses native SQL to check actual database state — nullifyEphemeralData
+        // runs a native SQL UPDATE that bypasses the Hibernate L2 cache, so
+        // Panache queries would return stale cached entities masking the nullification.
+        tm.begin();
+        Number extractorNullCount = (Number) em.createNativeQuery(
+                "SELECT COUNT(*) FROM value WHERE node_id = :nodeId AND data IS NULL")
+                .setParameter("nodeId", extractorId).getSingleResult();
+        Number extractorTotalCount = (Number) em.createNativeQuery(
+                "SELECT COUNT(*) FROM value WHERE node_id = :nodeId")
+                .setParameter("nodeId", extractorId).getSingleResult();
+        Number aggregatorNullCount = (Number) em.createNativeQuery(
+                "SELECT COUNT(*) FROM value WHERE node_id = :nodeId AND data IS NULL")
+                .setParameter("nodeId", aggregatorId).getSingleResult();
+
+        assertTrue(extractorTotalCount.intValue() > 0, "Extractor should have a value");
+        assertEquals(0, extractorNullCount.intValue(),
+                "Extractor (AUTO with KEEP child) data should NOT be nullified (#285) — "
+                + "found " + extractorNullCount + " nullified out of " + extractorTotalCount);
+        assertEquals(0, aggregatorNullCount.intValue(),
+                "Aggregator (KEEP) data should not be nullified");
+        tm.commit();
+
+        // Recalculate — this should work because extractor data is preserved
+        processingService.recalculateNode(aggregatorId);
+        ProcessingService.ActivityTracker recalcTracker = processingService.getByNodeId(aggregatorId);
+        if (recalcTracker != null) {
+            processingService.awaitRecalculation(aggregatorId, 30, TimeUnit.SECONDS);
+            if (recalcTracker.afterCleanup != null) {
+                recalcTracker.afterCleanup.get(30, TimeUnit.SECONDS);
+            }
+        }
+
+        // Verify after recalculation: aggregator should still have correct value
+        // Use native SQL to bypass L2 cache for the null check
+        tm.begin();
+        Number aggregatorNullAfterRecalc = (Number) em.createNativeQuery(
+                "SELECT COUNT(*) FROM value WHERE node_id = :nodeId AND data IS NULL")
+                .setParameter("nodeId", aggregatorId).getSingleResult();
+        assertEquals(0, aggregatorNullAfterRecalc.intValue(),
+                "Aggregator should still have non-null data after recalculation");
+        tm.commit();
+    }
 }

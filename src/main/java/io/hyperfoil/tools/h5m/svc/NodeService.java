@@ -244,6 +244,7 @@ public class NodeService implements NodeServiceInterface {
                             select 1
                             from node_edge ne JOIN node child ON child.id = ne.child_id
                             where ne.parent_id = n.id AND child.type NOT IN ANALYSIS_NODES
+                            AND child.ephemeral != 'KEEP'
                         )
                     ))
              )

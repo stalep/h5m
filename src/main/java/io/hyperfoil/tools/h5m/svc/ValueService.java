@@ -1041,6 +1041,7 @@ public class ValueService implements ValueServiceInterface {
                       JOIN node child ON child.id = ne.child_id
                       WHERE ne.parent_id = node.id
                         AND child.type NOT IN ANALYSIS_NODES
+                        AND child.ephemeral != 'KEEP'
                     )))
                   AND type NOT IN ROOT_OR_ANALYSIS_NODES
                   -- Protect nodes that are sources of analysis nodes.
@@ -1083,6 +1084,7 @@ public class ValueService implements ValueServiceInterface {
                 JOIN node child ON child.id = ne.child_id
                 WHERE ne.parent_id = node.id
                   AND child.type NOT IN ANALYSIS_NODES
+                  AND child.ephemeral != 'KEEP'
               )
             """.replaceAll("ROOT_OR_ANALYSIS_NODES",NodeService.ROOT_OR_ANALYSIS_NODES)
                         .replaceAll("ANALYSIS_NODES",NodeService.ANALYSIS_NODES))

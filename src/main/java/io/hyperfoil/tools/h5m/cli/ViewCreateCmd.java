@@ -23,7 +23,7 @@ public class ViewCreateCmd implements Command<H5mCommandInvocation>, FolderAware
     @Inject
     FolderServiceInterface folderService;
 
-    @Argument(description = "view name", required = true)
+    @Argument(description = "view name", required = true, validator = ReservedNamespaceValidator.class)
     String name;
 
     @Option(name = "to", acceptNameWithoutDashes = true, description = "target folder name",

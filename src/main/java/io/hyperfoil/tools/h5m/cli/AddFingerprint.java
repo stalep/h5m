@@ -3,6 +3,7 @@ package io.hyperfoil.tools.h5m.cli;
 import io.hyperfoil.tools.h5m.api.Node;
 import io.hyperfoil.tools.h5m.api.NodeGroup;
 import io.hyperfoil.tools.h5m.api.NodeType;
+import io.hyperfoil.tools.h5m.api.ReservedNamespace;
 import io.hyperfoil.tools.h5m.api.svc.NodeGroupServiceInterface;
 import io.hyperfoil.tools.h5m.api.svc.NodeServiceInterface;
 import jakarta.inject.Inject;
@@ -41,6 +42,10 @@ public class AddFingerprint implements Command<H5mCommandInvocation>, FolderAwar
 
         if (name == null || sourceExpr == null) {
             invocation.println("Usage: node add fingerprint [--to folder] <name> <{source1,source2}:.>");
+            return CommandResult.FAILURE;
+        }
+        if (ReservedNamespace.isReserved(name)) {
+            invocation.println("names starting with '" + ReservedNamespace.RESERVED_PREFIX + "' are reserved for internal use");
             return CommandResult.FAILURE;
         }
         if (folderName == null) {

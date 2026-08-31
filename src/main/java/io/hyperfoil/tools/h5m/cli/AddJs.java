@@ -1,6 +1,7 @@
 package io.hyperfoil.tools.h5m.cli;
 
 import io.hyperfoil.tools.h5m.api.NodeGroup;
+import io.hyperfoil.tools.h5m.api.ReservedNamespace;
 import io.hyperfoil.tools.h5m.api.NodeType;
 import io.hyperfoil.tools.h5m.api.svc.NodeGroupServiceInterface;
 import io.hyperfoil.tools.h5m.api.svc.NodeServiceInterface;
@@ -36,6 +37,10 @@ public class AddJs implements Command<H5mCommandInvocation>, FolderAware {
         try {
             if (folderName == null && invocation.hasFolderContext()) folderName = invocation.getFolderName();
             String name = (args != null && args.size() >= 1) ? args.get(0) : null;
+            if (ReservedNamespace.isReserved(name)) {
+                invocation.println("names starting with '" + ReservedNamespace.RESERVED_PREFIX + "' are reserved for internal use");
+                return CommandResult.FAILURE;
+            }
             String function = (args != null && args.size() >= 2) ? args.get(1) : null;
             if("-".equals(function)){
                 StringBuilder sb = new StringBuilder();

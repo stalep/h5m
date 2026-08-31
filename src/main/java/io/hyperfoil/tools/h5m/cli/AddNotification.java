@@ -22,7 +22,7 @@ public class AddNotification implements Command<H5mCommandInvocation>, FolderAwa
     @Argument(description = "notification method", required = true)
     NotificationMethod method;
 
-    @Option(name = "name", acceptNameWithoutDashes = true, description = "notification name (optional, auto-generated if not provided, must be unique within folder)")
+    @Option(name = "name", acceptNameWithoutDashes = true, description = "notification name (optional, auto-generated if not provided, must be unique within folder)", validator = ReservedNamespaceValidator.class)
     String name;
 
     @Option(name = "to", acceptNameWithoutDashes = true, description = "target folder name", completer = FolderCompleter.class)

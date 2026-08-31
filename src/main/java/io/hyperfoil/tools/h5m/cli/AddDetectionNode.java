@@ -48,7 +48,7 @@ public abstract class AddDetectionNode implements Command<H5mCommandInvocation>,
             description = "jq filter expression for fingerprints")
     String fingerprintFilter;
 
-    @Argument(description = "node name")
+    @Argument(description = "node name", validator = ReservedNamespaceValidator.class)
     String name;
 
     @Inject

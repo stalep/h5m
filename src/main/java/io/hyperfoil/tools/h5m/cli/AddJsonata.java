@@ -2,6 +2,7 @@ package io.hyperfoil.tools.h5m.cli;
 
 import io.hyperfoil.tools.h5m.api.NodeGroup;
 import io.hyperfoil.tools.h5m.api.NodeType;
+import io.hyperfoil.tools.h5m.api.ReservedNamespace;
 import io.hyperfoil.tools.h5m.api.svc.NodeGroupServiceInterface;
 import io.hyperfoil.tools.h5m.api.svc.NodeServiceInterface;
 import jakarta.inject.Inject;
@@ -42,6 +43,10 @@ public class AddJsonata implements Command<H5mCommandInvocation>, FolderAware {
             }
             if(name.matches("\\d+")){
                 invocation.println("nodes names cannot be numbers");
+                return CommandResult.FAILURE;
+            }
+            if (ReservedNamespace.isReserved(name)) {
+                invocation.println("names starting with '" + ReservedNamespace.RESERVED_PREFIX + "' are reserved for internal use");
                 return CommandResult.FAILURE;
             }
             if("-".equals(jsonata)){

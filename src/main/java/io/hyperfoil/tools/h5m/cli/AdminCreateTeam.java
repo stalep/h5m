@@ -15,7 +15,7 @@ public class AdminCreateTeam implements Command<H5mCommandInvocation> {
     @Inject
     TeamServiceInterface teamService;
 
-    @Argument(description = "team name", required = true)
+    @Argument(description = "team name", required = true, validator = ReservedNamespaceValidator.class)
     public String name;
 
     @Override

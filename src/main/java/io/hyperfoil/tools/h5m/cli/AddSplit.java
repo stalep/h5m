@@ -2,6 +2,7 @@ package io.hyperfoil.tools.h5m.cli;
 
 import io.hyperfoil.tools.h5m.api.NodeGroup;
 import io.hyperfoil.tools.h5m.api.NodeType;
+import io.hyperfoil.tools.h5m.api.ReservedNamespace;
 import io.hyperfoil.tools.h5m.api.svc.NodeGroupServiceInterface;
 import io.hyperfoil.tools.h5m.api.svc.NodeServiceInterface;
 import jakarta.inject.Inject;
@@ -35,6 +36,10 @@ public class AddSplit implements Command<H5mCommandInvocation>, FolderAware {
         String operation = (args != null && args.size() >= 2) ? args.get(1) : null;
         if(name == null){
             invocation.println("missing node name");
+            return CommandResult.FAILURE;
+        }
+        if (ReservedNamespace.isReserved(name)) {
+            invocation.println("names starting with '" + ReservedNamespace.RESERVED_PREFIX + "' are reserved for internal use");
             return CommandResult.FAILURE;
         }
         if(folderName == null){

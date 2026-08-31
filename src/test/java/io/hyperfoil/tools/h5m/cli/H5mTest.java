@@ -137,6 +137,19 @@ public class H5mTest {
     }
 
     @Test
+    public void add_folder_reserved_name_rejected() {
+        String reserved = "h5m.reserved";
+        List<String> results = run(aeshLauncher,
+                new String[]{"folder","add",reserved},
+                new String[]{"folder","list"}
+        );
+        String addOutput = results.getFirst();
+        assertTrue(addOutput.contains("reserved for internal use"), "reserved folder name should be rejected with a message:\n"+addOutput);
+        String listOutput = results.getLast();
+        assertFalse(listOutput.contains(reserved), "reserved folder should not have been created:\n"+listOutput);
+    }
+
+    @Test
     public void list_folder() {
         List<String> results = run(aeshLauncher,
             new String[]{"folder","add","foo"},

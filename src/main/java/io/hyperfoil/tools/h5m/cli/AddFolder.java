@@ -20,7 +20,7 @@ public class AddFolder implements Command<H5mCommandInvocation> {
     @Inject
     NodeGroupServiceInterface nodeGroupService;
 
-    @Argument(description = "folder name")
+    @Argument(description = "folder name", validator = ReservedNamespaceValidator.class)
     public String name;
 
     @Override

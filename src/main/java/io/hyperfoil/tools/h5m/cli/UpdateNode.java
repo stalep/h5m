@@ -31,7 +31,7 @@ public class UpdateNode implements Command<H5mCommandInvocation>, FolderAware {
     @Option(name = "operation", acceptNameWithoutDashes = true, shortName = 'o', description = "new operation (jq filter, js function, etc.)")
     String operation;
 
-    @Option(name = "name", acceptNameWithoutDashes = true, shortName = 'n', description = "rename the node")
+    @Option(name = "name", acceptNameWithoutDashes = true, shortName = 'n', description = "rename the node", validator = ReservedNamespaceValidator.class)
     String newName;
 
     @Inject

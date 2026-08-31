@@ -2,6 +2,7 @@ package io.hyperfoil.tools.h5m.cli;
 
 import io.hyperfoil.tools.h5m.api.NodeGroup;
 import io.hyperfoil.tools.h5m.api.NodeType;
+import io.hyperfoil.tools.h5m.api.ReservedNamespace;
 import io.hyperfoil.tools.h5m.api.svc.NodeGroupServiceInterface;
 import io.hyperfoil.tools.h5m.api.svc.NodeServiceInterface;
 import jakarta.inject.Inject;
@@ -40,6 +41,10 @@ public class AddJq implements Command<H5mCommandInvocation>, FolderAware {
             String jq = (args != null && args.size() >= 2) ? args.get(1) : null;
             if(name == null){
                 name = invocation.getShell().readLine(new Prompt("Enter name: "));
+            }
+            if (ReservedNamespace.isReserved(name)) {
+                invocation.println("names starting with '" + ReservedNamespace.RESERVED_PREFIX + "' are reserved for internal use");
+                return CommandResult.FAILURE;
             }
             NodeGroup foundGroup;
             do{

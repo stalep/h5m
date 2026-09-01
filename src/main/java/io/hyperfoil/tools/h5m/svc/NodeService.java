@@ -653,9 +653,8 @@ public class NodeService implements NodeServiceInterface {
      */
     JqValue evaluateRelativeDifference(List<Double> converted, RelativeDifference relDiff, long minPrevious, JqValue domainData) {
         if (converted.size() < relDiff.getWindow() + minPrevious) {
-            System.err.println("insufficient samples to calculate " + relDiff.name
-                    + " need " + (relDiff.getWindow() + minPrevious)
-                    + " have " + converted.size());
+            Log.debugf("insufficient samples to calculate %s: need %d, have %d",
+                    relDiff.name, relDiff.getWindow() + minPrevious, converted.size());
             return null;
         }
         DoubleBinaryOperator op = switch (relDiff.getFilter()) {

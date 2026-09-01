@@ -10,6 +10,8 @@ import io.hyperfoil.tools.h5m.provided.DatabaseEngine;
 import io.hyperfoil.tools.h5m.svc.FolderService;
 import io.hyperfoil.tools.h5m.svc.NodeService;
 import io.hyperfoil.tools.h5m.svc.ValueService;
+import io.quarkus.arc.Arc;
+import io.quarkus.arc.ManagedContext;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 
@@ -60,11 +62,15 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
 
     @Override
     public CommandResult execute(H5mCommandInvocation invocation) throws InterruptedException {
+        ManagedContext requestContext = Arc.container().requestContext();
+        requestContext.activate();
         try {
             return doExecute(invocation);
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
             return CommandResult.FAILURE;
+        } finally {
+            requestContext.terminate();
         }
     }
 
@@ -215,6 +221,10 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
                 }
             }
 
+            // Step 5: Change detection comparison
+            System.out.println("\n=== CHANGE DETECTION VALUES ===");
+            compareChangeDetections(legacyConn, testName, runIds);
+
             if (totalMismatches == 0 && totalMissing == 0) {
                 System.out.println("\nRESULT: PASS");
                 return CommandResult.SUCCESS;
@@ -239,7 +249,7 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
     private List<Long> getRunIds(Connection conn, long testId, int limit) throws SQLException {
         List<Long> ids = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT id FROM run WHERE testid = ? AND trashed = false ORDER BY id DESC LIMIT ?")) {
+                "SELECT id FROM run WHERE testid = ? AND trashed = false ORDER BY id ASC LIMIT ?")) {
             ps.setLong(1, testId);
             ps.setInt(2, limit);
             try (ResultSet rs = ps.executeQuery()) {
@@ -448,7 +458,7 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
     private Set<String> checkSourceDataQuality(Connection legacyConn) throws SQLException {
         Set<String> stubLabels = new HashSet<>();
 
-        // Get all schema IDs used by this test's runs
+        // Get all schema IDs used by this test's runs (source schemas)
         Set<Integer> schemaIds = new HashSet<>();
         try (PreparedStatement ps = legacyConn.prepareStatement(
                 "SELECT DISTINCT schemaid FROM run_schemas WHERE runid IN (SELECT id FROM run WHERE testid = ?)")) {
@@ -458,7 +468,21 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
             }
         }
 
-        // Get all label names available for these schemas
+        // Also include transformer target schemas — labels like Runtime and
+        // buildType are defined on the target schema, not the source schema
+        try (PreparedStatement ps = legacyConn.prepareStatement("""
+                SELECT DISTINCT s.id FROM schema s
+                JOIN transformer t ON s.uri = t.targetschemauri
+                JOIN test_transformers tt ON tt.transformer_id = t.id
+                WHERE tt.test_id = ?
+                """)) {
+            ps.setLong(1, testId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) schemaIds.add(rs.getInt(1));
+            }
+        }
+
+        // Get all label names available for these schemas (source + target)
         Set<String> availableLabels = new HashSet<>();
         if (!schemaIds.isEmpty()) {
             String placeholders = String.join(",", Collections.nCopies(schemaIds.size(), "?"));
@@ -583,6 +607,156 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
             if (!part.isEmpty()) result.add(part);
         }
         return result;
+    }
+
+    /**
+     * Compares Horreum change point counts with h5m detection value counts
+     * per variable, scoped to the verified runs. Issues warnings when counts differ.
+     */
+    private void compareChangeDetections(Connection legacyConn, String testName, List<Long> runIds) throws SQLException {
+        Map<String, Integer> horreumChanges = new LinkedHashMap<>();
+        Map<String, List<String>> variableLabels = new LinkedHashMap<>();
+        String placeholders = String.join(",", Collections.nCopies(runIds.size(), "?"));
+        try (PreparedStatement ps = legacyConn.prepareStatement("""
+                SELECT v.name, COUNT(c.id), v.labels
+                FROM change c
+                JOIN variable v ON v.id = c.variable_id
+                JOIN dataset ds ON ds.id = c.dataset_id
+                WHERE v.testid = ? AND ds.runid IN (%s)
+                GROUP BY v.name, v.labels
+                ORDER BY v.name
+                """.formatted(placeholders))) {
+            ps.setLong(1, testId);
+            for (int i = 0; i < runIds.size(); i++) {
+                ps.setLong(i + 2, runIds.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String varName = rs.getString(1);
+                    horreumChanges.put(varName, rs.getInt(2));
+                    String labelsJson = rs.getString(3);
+                    if (labelsJson != null) {
+                        variableLabels.put(varName, parseJsonStringArray(labelsJson));
+                    }
+                }
+            }
+        }
+
+        if (horreumChanges.isEmpty()) {
+            System.out.println("No change points in Horreum for the verified runs");
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> h5mDetections = em.createNativeQuery("""
+                SELECT n.name, COUNT(v.id)
+                FROM node n
+                LEFT JOIN value v ON v.node_id = n.id
+                WHERE n.type IN ('rd', 'ft', 'ed', 'sd')
+                  AND n.group_id = (SELECT group_id FROM folder WHERE name = :testName)
+                GROUP BY n.name
+                ORDER BY n.name
+                """)
+                .setParameter("testName", testName)
+                .getResultList();
+
+        Map<String, Integer> h5mByVariable = new LinkedHashMap<>();
+        for (Object[] row : h5mDetections) {
+            String nodeName = (String) row[0];
+            int count = ((Number) row[1]).intValue();
+            String variableName = extractVariableName(nodeName);
+            h5mByVariable.merge(variableName, count, Integer::sum);
+        }
+
+        int totalHorreum = 0;
+        int totalH5m = 0;
+        int warnings = 0;
+        System.out.printf("  %-45s %8s %6s%n", "Variable", "Horreum", "h5m");
+        System.out.printf("  %-45s %8s %6s%n", "-".repeat(45), "-------", "-----");
+
+        for (Map.Entry<String, Integer> entry : horreumChanges.entrySet()) {
+            String variable = entry.getKey();
+            int hCount = entry.getValue();
+            totalHorreum += hCount;
+
+            int h5mCount = resolveH5mDetectionCount(variable, h5mByVariable);
+            if (h5mCount == 0) {
+                List<String> labels = variableLabels.getOrDefault(variable, List.of());
+                for (String label : labels) {
+                    h5mCount = resolveH5mDetectionCount(label, h5mByVariable);
+                    if (h5mCount > 0) break;
+                }
+            }
+            totalH5m += h5mCount;
+
+            String status = "";
+            if (h5mCount == 0 && hCount > 0) {
+                status = "  \u26a0 MISSING";
+                warnings++;
+            } else if (h5mCount != hCount) {
+                status = "  \u26a0 DIFFERS";
+                warnings++;
+            }
+            System.out.printf("  %-45s %8d %6d%s%n", truncate(variable, 45), hCount, h5mCount, status);
+        }
+
+        for (Map.Entry<String, Integer> entry : h5mByVariable.entrySet()) {
+            if (entry.getValue() > 0) {
+                String variable = entry.getKey();
+                boolean matched = horreumChanges.keySet().stream()
+                        .anyMatch(h -> fuzzyVariableMatch(h, variable));
+                if (!matched) {
+                    matched = variableLabels.values().stream()
+                            .flatMap(List::stream)
+                            .anyMatch(label -> fuzzyVariableMatch(label, variable));
+                }
+                if (!matched) {
+                    System.out.printf("  %-45s %8s %6d  \u26a0 EXTRA%n", truncate(variable, 45), "-", entry.getValue());
+                    totalH5m += entry.getValue();
+                    warnings++;
+                }
+            }
+        }
+
+        System.out.println();
+        System.out.println("  Total: " + totalHorreum + " Horreum changes, " + totalH5m + " h5m detections");
+        if (warnings > 0) {
+            System.out.println("  \u26a0 WARNING: " + warnings + " change detection differences found");
+        } else if (totalHorreum > 0) {
+            System.out.println("  All change detection counts match");
+        }
+    }
+
+    private static String extractVariableName(String nodeName) {
+        if (nodeName.startsWith("rd.")) {
+            String rest = nodeName.substring(3);
+            int lastDot = rest.lastIndexOf('.');
+            if (lastDot > 0) {
+                return rest.substring(0, lastDot);
+            }
+            return rest;
+        } else if (nodeName.startsWith("ft")) {
+            return nodeName;
+        }
+        return nodeName;
+    }
+
+    private static int resolveH5mDetectionCount(String horreumVariable, Map<String, Integer> h5mByVariable) {
+        Integer count = h5mByVariable.get(horreumVariable);
+        if (count != null) return count;
+        for (Map.Entry<String, Integer> entry : h5mByVariable.entrySet()) {
+            if (fuzzyVariableMatch(horreumVariable, entry.getKey())) {
+                return entry.getValue();
+            }
+        }
+        return 0;
+    }
+
+    private static boolean fuzzyVariableMatch(String horreum, String h5m) {
+        if (horreum.equalsIgnoreCase(h5m)) return true;
+        String hNorm = horreum.toLowerCase().replaceAll("[\\s_]+", "");
+        String h5mNorm = h5m.toLowerCase().replaceAll("[\\s_]+", "");
+        return hNorm.equals(h5mNorm);
     }
 
     private int[] compareRun(Connection legacyConn, String testName, long runId, long rootValueId,
@@ -830,7 +1004,19 @@ public class VerifyLegacy implements Command<H5mCommandInvocation> {
             return new MatchResult(MatchType.STUB, null, -1);
         }
 
-        // Pass 4: there are h5m values but none match — report first non-null as the mismatch
+        // Pass 4: there are h5m values but none match — prefer the value at the
+        // matching ordinal so the mismatch report shows the corresponding dataset value,
+        // not always the first value in the map.
+        String atOrdinal = h5mOrdinals.get(ordinal);
+        if (atOrdinal != null && !"null".equals(atOrdinal)) {
+            return new MatchResult(MatchType.MISMATCH, atOrdinal, ordinal);
+        }
+        // Also try ordinal+1 (h5m idx is often ordinal+1 since root is idx 0)
+        String atOrdinalPlus1 = h5mOrdinals.get(ordinal + 1);
+        if (atOrdinalPlus1 != null && !"null".equals(atOrdinalPlus1)) {
+            return new MatchResult(MatchType.MISMATCH, atOrdinalPlus1, ordinal + 1);
+        }
+        // Fall back to first non-null value
         for (Map.Entry<Integer, String> e : h5mOrdinals.entrySet()) {
             String val = e.getValue();
             if (val != null && !"null".equals(val)) {

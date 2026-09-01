@@ -914,9 +914,18 @@ public class LoadLegacyTests implements Command<H5mCommandInvocation> {
                         while(rs.next()){
                             JqArray fingerprint_labels = (JqArray) JqValues.parse(rs.getString(1));
                             fingerprint_filter = rs.getString(2);
-                            String timeline_labels = rs.getString(3); // not sure how this is used atm
-                            String timeline_function = rs.getString(4); // not sure how this is used atm
-                            Fingerprint fingerprint = new Fingerprint(new ArrayList<>(),fingerprint_filter,new ArrayList<>(),timeline_function);
+                            String timeline_labels = rs.getString(3);
+                            String timeline_function = rs.getString(4);
+                            List<String> timelineLabelList = new ArrayList<>();
+                            if (timeline_labels != null && !timeline_labels.isBlank()) {
+                                JqValue parsed = JqValues.parse(timeline_labels);
+                                if (parsed.isArray()) {
+                                    for (int ti = 0; ti < parsed.length(); ti++) {
+                                        timelineLabelList.add(parsed.getElement(ti).asString(""));
+                                    }
+                                }
+                            }
+                            Fingerprint fingerprint = new Fingerprint(new ArrayList<>(),fingerprint_filter,timelineLabelList,timeline_function);
                             for (int li = 0; li < fingerprint_labels.length(); li++) fingerprint.labels.add(fingerprint_labels.get(li).asString(""));
                             test.fingerprints.add(fingerprint);
                         }

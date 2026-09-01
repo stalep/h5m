@@ -124,7 +124,9 @@ public class LoadLegacyRuns implements Command<H5mCommandInvocation> {
                     ps.setLong(1, testId);
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
-                            invocation.println("loading " + rs.getLong(1) + " uploads to " + name);
+                            long totalRuns = rs.getLong(1);
+                            long toLoad = limit > 0 ? Math.min(totalRuns, limit) : totalRuns;
+                            invocation.println("loading " + toLoad + " of " + totalRuns + " uploads to " + name);
                         }
                     }
                 }
@@ -163,11 +165,12 @@ public class LoadLegacyRuns implements Command<H5mCommandInvocation> {
                             count++;
                             batchCount++;
                             if (batch > 0 && batchCount >= batch) {
+                                long batchStart = System.currentTimeMillis();
                                 invocation.println("waiting for batch of " + batchCount + " to complete");
                                 for (long uid : batchUploadIds) {
                                     processingService.awaitIngestion(uid, 10, TimeUnit.MINUTES);
                                 }
-                                invocation.println("batch complete");
+                                invocation.println(String.format("batch complete in %.1fs", (System.currentTimeMillis() - batchStart) / 1000.0));
                                 batchUploadIds.clear();
                                 if (pause) {
                                     invocation.getShell().readLine(new Prompt("Press Enter to continue..."));
@@ -178,10 +181,12 @@ public class LoadLegacyRuns implements Command<H5mCommandInvocation> {
                     }
                     // Wait for any remaining uploads
                     if (!batchUploadIds.isEmpty()) {
+                        long finalStart = System.currentTimeMillis();
                         invocation.println("waiting for final " + batchUploadIds.size() + " uploads to complete");
                         for (long uid : batchUploadIds) {
                             processingService.awaitIngestion(uid, 10, TimeUnit.MINUTES);
                         }
+                        invocation.println(String.format("final batch complete in %.1fs", (System.currentTimeMillis() - finalStart) / 1000.0));
                     }
                     invocation.println("loaded " + count + " runs");
                 } finally {

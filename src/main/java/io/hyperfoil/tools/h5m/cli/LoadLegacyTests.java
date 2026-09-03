@@ -19,6 +19,7 @@ import io.hyperfoil.tools.h5m.api.node.RelativeDifferenceConfig;
 import io.hyperfoil.tools.h5m.api.svc.ViewServiceInterface;
 import io.hyperfoil.tools.h5m.svc.FolderService;
 import io.hyperfoil.tools.h5m.svc.NodeService;
+import io.quarkus.logging.Log;
 import io.hyperfoil.tools.yaup.Counters;
 import io.hyperfoil.tools.yaup.HashedLists;
 import io.hyperfoil.tools.yaup.HashedSets;
@@ -471,7 +472,14 @@ public class LoadLegacyTests implements Command<H5mCommandInvocation> {
             List<NodeEntity> transformerNodes = new ArrayList<>();
             for(Transformer transformer : test.transformers){
                 Label l  = new Label(-1,getRename(transformer,test.transformers().size()),transformer.function,transformer.extractors);
-                NodeEntity transform = createNodesFromLabel(l,folder.group.root,folder.group,nodeTracking,labelNames, false);
+                // Exclude this transformer's target schema label names from usedNames.
+                // Transformer extractors and target schema labels intentionally share
+                // names (standard Horreum pattern) — the extractors operate on the root
+                // input while labels operate on the transformer's output (post-dataset).
+                // Including them would incorrectly prefix extractors with '_'.
+                Set<String> transformerUsedNames = new HashSet<>(labelNames);
+                transformer.targetSchemaLabels.forEach(tsl -> transformerUsedNames.remove(tsl.name));
+                NodeEntity transform = createNodesFromLabel(l,folder.group.root,folder.group,nodeTracking,transformerUsedNames, false);
                 folder.group.addNode(transform);
                 nodeTracking.addNode(transform);
                 transformerNodes.add(transform);
@@ -542,7 +550,7 @@ public class LoadLegacyTests implements Command<H5mCommandInvocation> {
                 Counters<Extractor> extractorCounts = new Counters<>();
                 labelsForJsonpath.stream().flatMap(l->l.extractors().stream()).forEach(extractorCounts::add);
                 extractorCounts.forEach((e,c)->{
-                    System.out.println(e+" = "+c);
+                    Log.debugf("extractor %s count=%d", e, c);
                 });
                 for(Label label : labelsForJsonpath){
                     log(6,"label="+label.name);
@@ -550,10 +558,10 @@ public class LoadLegacyTests implements Command<H5mCommandInvocation> {
                     boolean multiSchema = labels.size() > 1;
                     //are any of the current label's extractors used by another label?
                     long maxCount = label.extractors.stream().mapToLong(e->extractorCounts.count(e)).max().orElse(0);
-                    System.out.println(label.name+" -> "+maxCount);
+                    Log.debugf("label %s maxExtractorCount=%d", label.name, maxCount);
                     multiSchema = maxCount > 1;
                     if(multiSchema){
-                        System.out.println("multiSchema "+label.name+" -> "+maxCount);
+                        Log.debugf("multiSchema %s maxExtractorCount=%d", label.name, maxCount);
                     }
                     NodeEntity labelNode = createNodesFromLabel(label,sourceNode,folder.group,nodeTracking,labelNames, multiSchema);
                     if(labelNode!=null){

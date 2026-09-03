@@ -98,6 +98,11 @@ public class ProcessingService implements ProcessingServiceInterface {
                 entity.completed = true;
             }
         }
+        // Stamp fingerprint_id on all values for this upload. By this point all
+        // work items have completed, so all values (range, domain, fingerprint) exist.
+        // This runs in its own transaction with no concurrent writers.
+        valueService.stampAllFingerprintsForRoot(rootValueId);
+
         int nullified = valueService.nullifyEphemeralData(rootValueId);
         if (nullified > 0) {
             Log.debugf("Nullified data for %d ephemeral values (root value %d)", nullified, rootValueId);

@@ -25,7 +25,9 @@ import java.util.stream.Collectors;
 @Entity(name = "value")
 @Table(indexes = {
     @Index(name = "idx_value_node_id", columnList = "node_id"),
-    @Index(name = "idx_value_folder_id", columnList = "folder_id")
+    @Index(name = "idx_value_folder_id", columnList = "folder_id"),
+    @Index(name = "idx_value_fp_node", columnList = "fingerprint_id, node_id, created_at"),
+    @Index(name = "idx_value_root", columnList = "root_id, node_id")
 })
 @Immutable
 @Cacheable
@@ -52,6 +54,14 @@ public class ValueEntity extends PanacheEntityBase {
 
     @ManyToOne(fetch = FetchType.LAZY)
     public FolderEntity folder;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "root_id")
+    public ValueEntity root;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "fingerprint_id")
+    public FingerprintEntity fingerprint;
 
     @CreationTimestamp
     @Column(updatable = false) // updatable = false ensures it's set only once

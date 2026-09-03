@@ -19,6 +19,7 @@ import io.hyperfoil.tools.h5m.api.node.RelativeDifferenceConfig;
 import io.hyperfoil.tools.h5m.api.svc.ViewServiceInterface;
 import io.hyperfoil.tools.h5m.svc.FolderService;
 import io.hyperfoil.tools.h5m.svc.NodeService;
+import io.quarkus.logging.Log;
 import io.hyperfoil.tools.yaup.Counters;
 import io.hyperfoil.tools.yaup.HashedLists;
 import io.hyperfoil.tools.yaup.HashedSets;

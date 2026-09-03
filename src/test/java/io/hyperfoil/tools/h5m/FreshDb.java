@@ -51,6 +51,7 @@ public class FreshDb {
                 stmt.executeUpdate("DELETE from team_members");
                 stmt.executeUpdate("DELETE from value_edge");
                 stmt.executeUpdate("DELETE from value");
+                stmt.executeUpdate("DELETE from fingerprint_entry");
                 stmt.executeUpdate("DELETE from folder");
                 stmt.executeUpdate("UPDATE node SET group_id = NULL, original_group_id = NULL, target_group_id = NULL, previous_version_id = NULL, original_node_id = NULL");
                 stmt.executeUpdate("DELETE from node_edge");

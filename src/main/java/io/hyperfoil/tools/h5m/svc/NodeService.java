@@ -15,6 +15,8 @@ import io.hyperfoil.tools.jhunter.Analysis;
 import io.hyperfoil.tools.jhunter.AnalysisOptions;
 import io.hyperfoil.tools.jhunter.ChangePoint;
 import io.hyperfoil.tools.h5m.api.svc.NodeServiceInterface;
+import io.hyperfoil.tools.h5m.entity.FingerprintEntity;
+import io.hyperfoil.tools.h5m.entity.FolderEntity;
 import io.hyperfoil.tools.h5m.entity.NodeEntity;
 import io.hyperfoil.tools.h5m.entity.NodeGroupEntity;
 import io.hyperfoil.tools.h5m.entity.ValueEntity;
@@ -292,6 +294,22 @@ public class NodeService implements NodeServiceInterface {
             for (ValueEntity v : nodeValues) {
                 valueService.delete(v);
             }
+            // Clean up FingerprintEntity entries when a fingerprint node is deleted.
+            // Must clear value.fingerprint_id before deleting fingerprint_entry rows
+            // to avoid FK violations.
+            if (node.type() == NodeType.FINGERPRINT) {
+                em.createNativeQuery("""
+                    UPDATE value SET fingerprint_id = NULL
+                    WHERE fingerprint_id IN (
+                        SELECT id FROM fingerprint_entry WHERE node_id = :nodeId
+                    )""")
+                    .setParameter("nodeId", nodeId)
+                    .executeUpdate();
+                em.createNativeQuery("DELETE FROM fingerprint_entry WHERE node_id = :nodeId")
+                    .setParameter("nodeId", nodeId)
+                    .executeUpdate();
+                em.getEntityManagerFactory().getCache().evict(ValueEntity.class);
+            }
             EdgeQueries.deleteChildEdges(em, "node_edge", node.id);
             // clean up edge rows where this node is a parent (inverse side not managed by JPA)
             EdgeQueries.deleteParentEdges(em, "node_edge", nodeId);
@@ -503,6 +521,154 @@ public class NodeService implements NodeServiceInterface {
                 ValueEntity fingerprintValue = fingerprintValues.get(fIdx);
                 if (fpFilter != null && !evaluateFingerprintFilter(fpFilter, fingerprintValue.data,fingerprintValue.node)) {
                     continue;
+                }
+                // Fast path: use fingerprint_id index when available (no recursive CTEs).
+                // Uses batch-fetched data + in-memory window scanning — same semantics
+                // as the legacy CTE path but without per-domain-value SQL queries.
+                // Handles out-of-order uploads by re-evaluating detection at following
+                // domain values affected by the insertion.
+                if (fingerprintValue.fingerprint != null && relDiff.getDomainNode() != null) {
+                    long fpEntityId = fingerprintValue.fingerprint.id;
+                    Long domainNodeId = relDiff.getDomainNode().getId();
+
+                    // Scope to the current fingerprint's groupBy branch
+                    List<ValueEntity> fpGroupBy = valueService.getAncestor(fingerprintValue, groupBy);
+                    if (fpGroupBy.isEmpty()) continue;
+                    ValueEntity groupByValue = fpGroupBy.getFirst();
+
+                    // Batch fetch range and domain values for this fingerprint via
+                    // the fingerprint_id index. Merge with current upload's values
+                    // (which may not have fingerprint_id stamped yet).
+                    List<ValueEntity> batchRangeValues = new ArrayList<>(valueService.findByFingerprint(
+                            fpEntityId, relDiff.getRangeNode().getId(), domainNodeId, -1, true));
+                    List<ValueEntity> batchDomainValues = new ArrayList<>(valueService.findByFingerprint(
+                            fpEntityId, domainNodeId, domainNodeId, -1, true));
+
+                    List<ValueEntity> rootDomainValues = valueService.getDescendantValues(groupByValue, relDiff.getDomainNode());
+                    List<ValueEntity> currentRangeValues = valueService.getDescendantValues(groupByValue, relDiff.getRangeNode());
+
+                    // Merge current upload's values if missing from batch
+                    Set<Long> batchRangeIds = batchRangeValues.stream().map(v -> v.id).collect(Collectors.toSet());
+                    Set<Long> batchDomainIds = batchDomainValues.stream().map(v -> v.id).collect(Collectors.toSet());
+                    for (ValueEntity crv : currentRangeValues) {
+                        if (!batchRangeIds.contains(crv.id)) batchRangeValues.add(crv);
+                    }
+                    for (ValueEntity cdv : rootDomainValues) {
+                        if (!batchDomainIds.contains(cdv.id)) batchDomainValues.add(cdv);
+                    }
+
+                    // Sort both lists by domain value (ascending)
+                    batchDomainValues.sort((a, b) -> {
+                        String aStr = a.data != null ? a.data.toString() : "";
+                        String bStr = b.data != null ? b.data.toString() : "";
+                        return aStr.compareTo(bStr);
+                    });
+                    // Build root_id -> domain position lookup for O(1) range value sorting
+                    Map<Long, Integer> rootIdToPos = new HashMap<>();
+                    for (int i = 0; i < batchDomainValues.size(); i++) {
+                        ValueEntity dv = batchDomainValues.get(i);
+                        if (dv.root != null) {
+                            rootIdToPos.put(dv.root.id, i);
+                        }
+                    }
+
+                    batchRangeValues.sort((a, b) -> {
+                        int aPos = a.root != null ? rootIdToPos.getOrDefault(a.root.id, -1) : -1;
+                        int bPos = b.root != null ? rootIdToPos.getOrDefault(b.root.id, -1) : -1;
+                        return Integer.compare(aPos, bPos);
+                    });
+
+                    // Build domain-position lookup
+                    Map<Long, Integer> domainPosById = new HashMap<>();
+                    for (int i = 0; i < batchDomainValues.size(); i++) {
+                        domainPosById.put(batchDomainValues.get(i).id, i);
+                    }
+
+                    int windowSize = (int)(relDiff.getWindow() + minPrevious);
+
+                    // Replicate the legacy inner loop: accumulate domain values,
+                    // evaluate at each one, skip ahead on detection.
+                    // This handles out-of-order uploads by re-evaluating following
+                    // domain values that may be affected by the insertion.
+                    List<ValueEntity> allDomainValues = new ArrayList<>();
+
+                    for (int sdIdx = 0; sdIdx < rootDomainValues.size(); sdIdx++) {
+                        ValueEntity uploadedDomainValue = rootDomainValues.get(sdIdx);
+
+                        Integer uploadDomainPos = domainPosById.get(uploadedDomainValue.id);
+                        if (uploadDomainPos == null) continue;
+
+                        // Compute preceding + following domain values by position
+                        int precedingStart = Math.max(0, uploadDomainPos - windowSize + 1);
+                        int precedingEnd = uploadDomainPos + 1;
+                        List<ValueEntity> preceedingDomainValues = new ArrayList<>(
+                                batchDomainValues.subList(precedingStart, precedingEnd));
+
+                        int followingStart = uploadDomainPos + 1;
+                        // Legacy query uses limit=windowSize which INCLUDES the pivot,
+                        // then removes the pivot. Net: windowSize-1 following values.
+                        int followingEnd = Math.min(batchDomainValues.size(), uploadDomainPos + windowSize);
+                        List<ValueEntity> followingDomainValues = followingStart < followingEnd
+                                ? new ArrayList<>(batchDomainValues.subList(followingStart, followingEnd))
+                                : new ArrayList<>();
+
+                        // Accumulate (same as legacy — allDomainValues grows across sdIdx iterations)
+                        allDomainValues.addAll(preceedingDomainValues);
+                        allDomainValues.addAll(followingDomainValues);
+
+                        // Delete-then-recompute: remove ALL existing detections whose
+                        // domain value falls within the current evaluation window.
+                        // This matches Horreum's pattern of clearing invalidated
+                        // detections before re-evaluating, preventing duplicates.
+                        List<ValueEntity> persistedChangeValues = valueService.findByFingerprint(
+                                fpEntityId, relDiff.getId(), null, -1, true);
+                        Set<JqValue> domainScope = new HashSet<>();
+                        for (ValueEntity dv : allDomainValues) {
+                            if (dv.data != null) domainScope.add(dv.data);
+                        }
+                        for (ValueEntity existing : persistedChangeValues) {
+                            JqValue existingDomain = existing.data != null ? existing.data.getField("domainvalue") : JqNull.NULL;
+                            if (!existingDomain.isNull() && domainScope.contains(existingDomain)) {
+                                valueService.delete(existing);
+                            }
+                        }
+
+                        // Inner loop: evaluate at each accumulated domain value
+                        for (int dIdx = 0; dIdx < allDomainValues.size(); dIdx++) {
+                            ValueEntity domainValue = allDomainValues.get(dIdx);
+                            Integer domainPos = domainPosById.get(domainValue.id);
+                            if (domainPos == null) continue;
+
+                            // Slice range values: take up to (window + minPrevious) values
+                            // ending at this domain position
+                            int rangeEnd = Math.min(domainPos + 1, batchRangeValues.size());
+                            int rangeStart = Math.max(0, rangeEnd - windowSize);
+                            List<Double> converted = batchRangeValues.subList(rangeStart, rangeEnd)
+                                    .stream()
+                                    .map(v -> v.data != null ? v.data.tryDouble() : null)
+                                    .filter(Objects::nonNull)
+                                    .toList();
+
+                            JqValue changeData = evaluateRelativeDifference(converted, relDiff, minPrevious, domainValue.data);
+                            if (changeData != null) {
+                                dIdx += minPrevious; // skip ahead (same as legacy)
+                                ValueEntity changeValue = new ValueEntity(root.folder, relDiff, changeData);
+                                changeValue.idx = startingOrdinal;
+                                changeValue.root = root;
+                                changeValue.fingerprint = fingerprintValue.fingerprint;
+                                List<ValueEntity> foundParents = valueService.getAncestor(domainValue, groupBy);
+                                if (foundParents.size() == 1) {
+                                    changeValue.sources = foundParents;
+                                }
+                                rtrn.add(changeValue);
+                            }
+                        }
+
+                        // Note: stale detection cleanup was done BEFORE the inner loop
+                        // (delete-then-recompute pattern). New detections from the inner
+                        // loop replace the deleted ones at domain values that still trigger.
+                    }
+                    continue; // skip the legacy CTE-based path
                 }
                 if (relDiff.getDomainNode() != null) {
                     // Domain-based ordering: iterate over domain values to find matching ranges.
@@ -1289,6 +1455,23 @@ public class NodeService implements NodeServiceInterface {
         newValue.node = node;
         newValue.data = fpBuilder.build();
         newValue.sources = node.sources.stream().filter(n->sourceValues.containsKey(n.getId())).map(n -> sourceValues.get(n.getId())).collect(Collectors.toList());
+
+        // Resolve or create the FingerprintEntity for this fingerprint data.
+        // Try source values first, then look up from the node group.
+        FolderEntity folder = sourceValues.values().stream()
+                .map(v -> v.folder)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (folder == null && node.group != null) {
+            folder = FolderEntity.find("group.id", node.group.id).firstResult();
+        }
+        if (folder != null) {
+            byte[] fpBytes = JqValues.serializeToBytes(newValue.data);
+            FingerprintEntity fpEntity = FingerprintEntity.findOrCreate(em, folder, node, fpBytes);
+            newValue.fingerprint = fpEntity;
+        }
+
         return List.of(newValue);
     }
     public JqValue createNamedFingerprintValue(NodeEntity node,JqObject value){

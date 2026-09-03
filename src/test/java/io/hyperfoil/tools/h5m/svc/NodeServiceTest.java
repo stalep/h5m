@@ -5,6 +5,7 @@ import io.hyperfoil.tools.h5m.api.node.RelativeDifferenceConfig.Filter;
 import io.hyperfoil.tools.jjq.value.*;
 import io.hyperfoil.tools.h5m.FreshDb;
 import io.hyperfoil.tools.h5m.api.Node;
+import io.hyperfoil.tools.h5m.entity.FingerprintEntity;
 import io.hyperfoil.tools.h5m.entity.FolderEntity;
 import io.hyperfoil.tools.h5m.entity.NodeEntity;
 import io.hyperfoil.tools.h5m.entity.NodeGroupEntity;
@@ -275,6 +276,101 @@ public class NodeServiceTest extends FreshDb {
     public void renameParameters_spread_parameter_uses_map(){
         assertEquals("({\ne_bar : bar,\nbuz\n})=>{\n  return bar.map(v=>v['bar'])\n}",nodeService.renameParameters("({\nbar,\nbuz\n})=>{\n  return bar.map(v=>v['bar'])\n}",Map.of("bar","e_bar")));
     }
+
+    /**
+     * Tests that deleting a FingerprintNode cleans up FingerprintEntity rows
+     * and nullifies fingerprint_id on sibling values that reference them.
+     */
+    @Test
+    public void delete_fingerprint_node_cleans_up_fingerprint_entries() throws HeuristicRollbackException, SystemException, HeuristicMixedException, RollbackException, NotSupportedException {
+        // Create a folder with a FingerprintNode and sibling range values
+        FolderService folderService = jakarta.enterprise.inject.spi.CDI.current().select(FolderService.class).get();
+        tm.begin();
+        long folderId = folderService.create("fp-cleanup-test").id();
+        FolderEntity folder = folderService.read(folderId);
+
+        JqNode fpSource = new JqNode("fpSource", ".fp", folder.group.root);
+        fpSource.group = folder.group;
+        fpSource.persist();
+
+        FingerprintNode fpNode = new FingerprintNode("fp", "", List.of(fpSource));
+        fpNode.group = folder.group;
+        fpNode.persist();
+
+        JqNode rangeNode = new JqNode("range", ".y", folder.group.root);
+        rangeNode.group = folder.group;
+        rangeNode.persist();
+
+        // Create root values with range and fingerprint children
+        ValueEntity rootVal1 = new ValueEntity(null, folder.group.root, JqValues.parse("{\"y\": 1, \"fp\": \"alpha\"}"));
+        rootVal1.persist();
+        ValueEntity rangeVal1 = new ValueEntity(null, rangeNode, JqNumber.of(1), List.of(rootVal1));
+        rangeVal1.persist();
+        ValueEntity fpVal1 = new ValueEntity(null, fpNode, JqString.of("alpha"), List.of(rootVal1));
+        fpVal1.persist();
+
+        ValueEntity rootVal2 = new ValueEntity(null, folder.group.root, JqValues.parse("{\"y\": 2, \"fp\": \"alpha\"}"));
+        rootVal2.persist();
+        ValueEntity rangeVal2 = new ValueEntity(null, rangeNode, JqNumber.of(2), List.of(rootVal2));
+        rangeVal2.persist();
+        ValueEntity fpVal2 = new ValueEntity(null, fpNode, JqString.of("alpha"), List.of(rootVal2));
+        fpVal2.persist();
+
+        // Create FingerprintEntity and stamp fingerprint_id on sibling values via native SQL
+        byte[] fpData = JqValues.serializeToBytes(JqString.of("alpha"));
+        FingerprintEntity fpEntity = FingerprintEntity.findOrCreate(em, folder, fpNode, fpData);
+        em.flush();
+
+        // ValueEntity is @Immutable, so use native SQL to set fingerprint_id
+        em.createNativeQuery("UPDATE value SET fingerprint_id = :fpId WHERE id IN (:v1, :v2, :v3, :v4)")
+                .setParameter("fpId", fpEntity.id)
+                .setParameter("v1", rangeVal1.id)
+                .setParameter("v2", rangeVal2.id)
+                .setParameter("v3", fpVal1.id)
+                .setParameter("v4", fpVal2.id)
+                .executeUpdate();
+        tm.commit();
+
+        // Verify pre-conditions: FingerprintEntity exists, values have fingerprint_id
+        long fpEntryCount = FingerprintEntity.count("node.id", fpNode.id);
+        assertTrue(fpEntryCount > 0, "FingerprintEntity rows should exist before delete");
+
+        Long stampedCount = (Long) em.createQuery(
+                "SELECT count(v) FROM value v WHERE v.fingerprint.id = :fpId")
+                .setParameter("fpId", fpEntity.id)
+                .getSingleResult();
+        assertEquals(4L, stampedCount, "4 values should have fingerprint_id set");
+
+        long fpNodeId = fpNode.id;
+        long fpEntityId = fpEntity.id;
+        long rangeVal1Id = rangeVal1.id;
+        long rangeVal2Id = rangeVal2.id;
+
+        // Delete the fingerprint node
+        nodeService.delete(fpNodeId);
+
+        // Clear the persistence context to get fresh reads
+        em.clear();
+
+        // Verify: FingerprintEntity rows are deleted
+        long fpEntryCountAfter = FingerprintEntity.count("node.id", fpNodeId);
+        assertEquals(0, fpEntryCountAfter, "FingerprintEntity rows should be deleted after fingerprint node deletion");
+
+        // Verify: values that had fingerprint_id now have it set to NULL
+        Long stampedCountAfter = (Long) em.createQuery(
+                "SELECT count(v) FROM value v WHERE v.fingerprint.id = :fpId")
+                .setParameter("fpId", fpEntityId)
+                .getSingleResult();
+        assertEquals(0L, stampedCountAfter, "No values should reference the deleted FingerprintEntity");
+
+        // Verify: range values still exist (they belong to rangeNode, not fpNode)
+        assertNotNull(ValueEntity.findById(rangeVal1Id), "Range value 1 should still exist");
+        assertNotNull(ValueEntity.findById(rangeVal2Id), "Range value 2 should still exist");
+
+        // Verify: fingerprint node itself is gone
+        assertNull(NodeEntity.findById(fpNodeId), "FingerprintNode should be deleted");
+    }
+
     @Test
     public void renameParameters_spaced_parameters() {
         assertEquals("function foo( biz , buz ){}", nodeService.renameParameters("function foo( fiz , fuzz ){}", Map.of("fiz", "biz", "fuzz", "buz")));
@@ -822,6 +918,94 @@ public class NodeServiceTest extends FreshDb {
 
         assertEquals(RelativeDifference.DEFAULT_FILTER, relDifference.getFilter(),
                 "getFilter() should return default (MEAN) when no filter is configured");
+    }
+
+    /**
+     * Tests that a group with two fingerprint nodes works correctly via the
+     * legacy CTE path. Each detection node references a different fingerprint
+     * node, and both should detect changes independently.
+     *
+     * This validates that multi-fingerprint groups fall back to the CTE path
+     * (which uses DAG traversal and fingerprint data matching rather than
+     * fingerprint_id) and produce correct results. The fast path assumes
+     * one fingerprint per groupBy scope; when fingerprint_id is not stamped
+     * (as with manually created values), the legacy path handles it correctly.
+     */
+    @Test
+    public void calculateRelativeDifference_multi_fingerprint_uses_legacy_path() throws SystemException, NotSupportedException, HeuristicRollbackException, HeuristicMixedException, RollbackException, IOException {
+        tm.begin();
+        NodeEntity rootNode = new RootNode();
+        rootNode.persist();
+        NodeEntity rangeNode = new JqNode("range", ".y", rootNode);
+        rangeNode.persist();
+        NodeEntity domainNode = new JqNode("domain", ".domain", rootNode);
+        domainNode.persist();
+
+        // Two fingerprint extractors — each extracts a different field.
+        // Neither has fingerprint_id set (no pipeline stamping), so both
+        // detection nodes use the legacy CTE path (findMatchingFingerprint).
+        JqNode fpNodeA = new JqNode("fpA", ".fpA", rootNode);
+        fpNodeA.persist();
+        JqNode fpNodeB = new JqNode("fpB", ".fpB", rootNode);
+        fpNodeB.persist();
+
+        // Create 3 uploads: stable (1, 1) then a big change (10).
+        // Same pattern as calculateRelativeDifference_root but with two fingerprint nodes.
+        ValueEntity rootValue01 = new ValueEntity(null, rootNode, JqValues.parse(
+                "{\"y\": 1, \"domain\": 10, \"fpA\": \"x86\", \"fpB\": \"release\"}"));
+        rootValue01.persist();
+        new ValueEntity(null, rangeNode, rootValue01.data.getField("y"), List.of(rootValue01)).persist();
+        new ValueEntity(null, domainNode, rootValue01.data.getField("domain"), List.of(rootValue01)).persist();
+        new ValueEntity(null, fpNodeA, rootValue01.data.getField("fpA"), List.of(rootValue01)).persist();
+        new ValueEntity(null, fpNodeB, rootValue01.data.getField("fpB"), List.of(rootValue01)).persist();
+
+        ValueEntity rootValue02 = new ValueEntity(null, rootNode, JqValues.parse(
+                "{\"y\": 1, \"domain\": 20, \"fpA\": \"x86\", \"fpB\": \"release\"}"));
+        rootValue02.persist();
+        new ValueEntity(null, rangeNode, rootValue02.data.getField("y"), List.of(rootValue02)).persist();
+        new ValueEntity(null, domainNode, rootValue02.data.getField("domain"), List.of(rootValue02)).persist();
+        new ValueEntity(null, fpNodeA, rootValue02.data.getField("fpA"), List.of(rootValue02)).persist();
+        new ValueEntity(null, fpNodeB, rootValue02.data.getField("fpB"), List.of(rootValue02)).persist();
+
+        ValueEntity rootValue03 = new ValueEntity(null, rootNode, JqValues.parse(
+                "{\"y\": 10, \"domain\": 30, \"fpA\": \"x86\", \"fpB\": \"release\"}"));
+        rootValue03.persist();
+        new ValueEntity(null, rangeNode, rootValue03.data.getField("y"), List.of(rootValue03)).persist();
+        new ValueEntity(null, domainNode, rootValue03.data.getField("domain"), List.of(rootValue03)).persist();
+        new ValueEntity(null, fpNodeA, rootValue03.data.getField("fpA"), List.of(rootValue03)).persist();
+        new ValueEntity(null, fpNodeB, rootValue03.data.getField("fpB"), List.of(rootValue03)).persist();
+        tm.commit();
+
+        // Detection node using fpNodeA — uses null domain to avoid domain-ordering
+        // complexity and exercise the created_at fallback (same as nullDomain tests)
+        RelativeDifference rdA = new RelativeDifference();
+        rdA.setFilter(Filter.MEAN);
+        rdA.setWindow(1);
+        rdA.setMinPrevious(1);
+        rdA.setThreshold(0.2);
+        rdA.setNodes(fpNodeA, rootNode, rangeNode, null);
+
+        // Detection node using fpNodeB — also null domain
+        RelativeDifference rdB = new RelativeDifference();
+        rdB.setFilter(Filter.MEAN);
+        rdB.setWindow(1);
+        rdB.setMinPrevious(1);
+        rdB.setThreshold(0.2);
+        rdB.setNodes(fpNodeB, rootNode, rangeNode, null);
+
+        // Both should detect the change (1 -> 10) via the legacy CTE path
+        // since fingerprint_id is not set on values (no pipeline stamping)
+        List<ValueEntity> foundA = nodeService.calculateRelativeDifferenceValues(rdA, rootValue01, 0);
+        assertNotNull(foundA);
+        assertFalse(foundA.isEmpty(), "Detection via fpA should find a change");
+
+        List<ValueEntity> foundB = nodeService.calculateRelativeDifferenceValues(rdB, rootValue01, 0);
+        assertNotNull(foundB);
+        assertFalse(foundB.isEmpty(), "Detection via fpB should find a change");
+
+        // Verify both detected a change
+        assertTrue(foundA.getFirst().data.has("ratio"), "Detection A should have ratio");
+        assertTrue(foundB.getFirst().data.has("ratio"), "Detection B should have ratio");
     }
 
     /**
@@ -2456,7 +2640,9 @@ public class NodeServiceTest extends FreshDb {
 
     @Test
     public void jsonpathToJq_keyvalue_function(){
-        assertEquals(                ".results | to_entries[].key",
+        // [*] before .keyvalue() is collapsed — the intent is to enumerate the object's
+        // own entries, not iterate values then enumerate sub-entries (issue #quarkus-sb-113)
+        assertEquals(".results | to_entries[].key",
                 NodeService.jsonpathToJq("$.results[*].keyvalue().key"));
     }
 

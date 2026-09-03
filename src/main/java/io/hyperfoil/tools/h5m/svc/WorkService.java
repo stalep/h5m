@@ -2,6 +2,7 @@ package io.hyperfoil.tools.h5m.svc;
 
 import io.hyperfoil.tools.jjq.value.JqValues;
 import io.hyperfoil.tools.h5m.api.svc.WorkServiceInterface;
+import io.hyperfoil.tools.h5m.api.NodeType;
 import io.hyperfoil.tools.h5m.entity.NodeEntity;
 import io.hyperfoil.tools.h5m.entity.ValueEntity;
 import io.hyperfoil.tools.h5m.entity.work.Work;
@@ -354,6 +355,8 @@ public class WorkService implements WorkServiceInterface {
                 valueService.createAll(toPersist);
             }
             newOrUpdated.addAll(calculated);
+            // Note: fingerprint_id stamping is done in ProcessingService.completeIngestion()
+            // after ALL work items complete, ensuring all sibling values exist.
             if(!newOrUpdated.isEmpty()){
                 Set<NodeEntity> createdValues = newOrUpdated.stream().map(v->v.node).collect(Collectors.toSet());
                 for(NodeEntity node : createdValues){

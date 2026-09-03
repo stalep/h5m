@@ -4,6 +4,7 @@ import io.hyperfoil.tools.jjq.value.JqValue;
 import io.hyperfoil.tools.jjq.value.JqValues;
 import io.hyperfoil.tools.h5m.api.Value;
 import io.hyperfoil.tools.h5m.api.svc.ValueServiceInterface;
+import io.hyperfoil.tools.h5m.entity.FingerprintEntity;
 import io.hyperfoil.tools.h5m.entity.FolderEntity;
 import io.hyperfoil.tools.h5m.entity.NodeEntity;
 import io.hyperfoil.tools.h5m.entity.ProcessingEntity;
@@ -121,6 +122,13 @@ public class ValueService implements ValueServiceInterface {
                     FolderEntity.class
             ).setParameter("id", folderId).getSingleResult();
             ValueEntity newValue = create(new ValueEntity(folder, folder.group.root, data));
+            // Root value references itself as root_id.
+            // Use native SQL because @Immutable prevents Hibernate updates.
+            em.createNativeQuery("UPDATE value SET root_id = :id WHERE id = :id")
+                    .setParameter("id", newValue.id)
+                    .executeUpdate();
+            // Evict from cache so subsequent reads see root_id
+            em.getEntityManagerFactory().getCache().evict(ValueEntity.class, newValue.id);
 
             ProcessingEntity tracking = new ProcessingEntity(folder.id, null, newValue.id);
             tracking.persist();
@@ -141,6 +149,23 @@ public class ValueService implements ValueServiceInterface {
 
     @Transactional
     public ValueEntity create(ValueEntity value){
+        // Propagate root_id and fingerprint_id from parent values
+        if (value.root == null && value.sources != null) {
+            for (ValueEntity source : value.sources) {
+                if (source.root != null) {
+                    value.root = source.root;
+                    break;
+                }
+            }
+        }
+        if (value.fingerprint == null && value.sources != null) {
+            for (ValueEntity source : value.sources) {
+                if (source.fingerprint != null) {
+                    value.fingerprint = source.fingerprint;
+                    break;
+                }
+            }
+        }
         if(!value.isPersistent()){
             value = em.merge(value);
         }
@@ -151,10 +176,7 @@ public class ValueService implements ValueServiceInterface {
     public List<ValueEntity> createAll(List<ValueEntity> values){
         List<ValueEntity> result = new ArrayList<>(values.size());
         for (ValueEntity value : values) {
-            if(!value.isPersistent()){
-                value = em.merge(value);
-            }
-            result.add(value);
+            result.add(create(value));
         }
         for (int i = 0; i < values.size(); i++) {
             values.get(i).id = result.get(i).id;
@@ -503,7 +525,163 @@ public class ValueService implements ValueServiceInterface {
         return rtrn;
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Stamp fingerprint_id on all values for a given upload (root_id).
+     * For each fingerprint value in the upload, finds its groupBy ancestor
+     * and stamps all descendant values of that ancestor with the fingerprint.
+     * Called from completeIngestion after all work items have completed,
+     * so all values exist and there are no concurrent writers.
+     *
+     * <p><b>Single-fingerprint assumption:</b> stampFingerprintOnSiblings uses
+     * {@code AND fingerprint_id IS NULL} to avoid overwriting. When multiple
+     * fingerprint nodes exist in the same group, the first one processed claims
+     * all descendant values and the second gets zero updates. Detection nodes
+     * referencing the second fingerprint will not find matching range/domain
+     * values via the fast path (findByFingerprint) and will fall back to the
+     * legacy CTE path (findMatchingFingerprint), which is correct but slower.
+     * This is acceptable because no existing Horreum test uses multiple
+     * fingerprint nodes per group. If multi-fingerprint support is needed,
+     * the value table would need a many-to-many relationship with fingerprint_entry.
+     */
+    public void stampAllFingerprintsForRoot(long rootValueId) {
+        // Find all fingerprint values for this upload
+        @SuppressWarnings("unchecked")
+        List<Object[]> fpValues = em.createNativeQuery("""
+                SELECT v.id, v.fingerprint_id FROM value v
+                JOIN node n ON v.node_id = n.id
+                WHERE v.root_id = :rootId AND n.type = 'fp' AND v.fingerprint_id IS NOT NULL
+                """)
+                .setParameter("rootId", rootValueId)
+                .getResultList();
+
+        for (Object[] row : fpValues) {
+            long fpValueId = ((Number) row[0]).longValue();
+            long fpEntityId = ((Number) row[1]).longValue();
+
+            // Find the groupBy ancestor: walk up from the fingerprint value's source
+            // through the node graph to find the dataset/split node, then find the
+            // corresponding dataset value via getAncestor.
+            ValueEntity fpValue = em.find(ValueEntity.class, fpValueId);
+            if (fpValue == null || fpValue.sources == null || fpValue.sources.isEmpty()) continue;
+
+            ValueEntity firstSource = fpValue.sources.getFirst();
+            NodeEntity fpSourceNode = firstSource.node;
+            if (fpSourceNode == null || fpSourceNode.sources == null || fpSourceNode.sources.isEmpty()) continue;
+
+            NodeEntity datasetNode = fpSourceNode.sources.getFirst();
+            List<ValueEntity> datasetValues = getAncestor(firstSource, datasetNode);
+            if (datasetValues.isEmpty()) continue;
+
+            FingerprintEntity fpEntity = em.find(FingerprintEntity.class, fpEntityId);
+            if (fpEntity != null) {
+                stampFingerprintOnSiblings(fpEntity, datasetValues.getFirst().id);
+            }
+        }
+    }
+
+    /**
+     * Stamp fingerprint_id on all descendant values of a specific groupBy VALUE.
+     * This scopes the stamp to a single dataset/split branch, so each fingerprint
+     * only stamps its own siblings — not siblings from other datasets that share
+     * the same groupBy NODE.
+     *
+     * @param fingerprintEntity the resolved FingerprintEntity
+     * @param groupByValueId the specific groupBy value ID that ancestors this fingerprint
+     */
+    public int stampFingerprintOnSiblings(FingerprintEntity fingerprintEntity, long groupByValueId) {
+        int updated = em.createNativeQuery("""
+                WITH RECURSIVE desc_values(vid) AS (
+                    SELECT ve.child_id FROM value_edge ve WHERE ve.parent_id = :groupByValueId
+                    UNION ALL
+                    SELECT ve.child_id FROM value_edge ve JOIN desc_values d ON ve.parent_id = d.vid
+                )
+                UPDATE value SET fingerprint_id = :fpId
+                WHERE id IN (SELECT vid FROM desc_values)
+                  AND fingerprint_id IS NULL
+                """)
+                .setParameter("fpId", fingerprintEntity.id)
+                .setParameter("groupByValueId", groupByValueId)
+                .executeUpdate();
+        if (updated > 0) {
+            em.getEntityManagerFactory().getCache().evict(ValueEntity.class);
+        }
+        return updated;
+    }
+
+    /**
+     * Find all values for a given node that share a fingerprint, ordered by domain value
+     * or created_at. Uses the fingerprint_id index instead of recursive CTEs.
+     *
+     * @param fingerprintId the FingerprintEntity ID
+     * @param nodeId the target node ID (range node, domain node, or detection node)
+     * @param domainNodeId optional domain node for ordering (null = order by created_at)
+     * @param limit max results (-1 for unlimited)
+     * @param ascending true for ASC, false for DESC
+     * @return values ordered by domain or created_at
+     */
+    public List<ValueEntity> findByFingerprint(long fingerprintId, long nodeId,
+                                                Long domainNodeId, int limit, boolean ascending) {
+        String direction = ascending ? "ASC" : "DESC";
+        String sql;
+        if (domainNodeId != null) {
+            // Order by domain value — join range values with their domain value siblings
+            // via fingerprint_id + root_id (same upload, same fingerprint series)
+            String dataToSortable = switch (db.kind()) {
+                case POSTGRESQL -> "convert_from(dv.data, 'UTF-8')::jsonb";
+                case SQLITE -> "json_extract(CAST(dv.data AS TEXT), '$')";
+            };
+            sql = """
+                SELECT v.id FROM value v
+                JOIN value dv ON dv.fingerprint_id = v.fingerprint_id
+                    AND dv.root_id = v.root_id
+                    AND dv.node_id = :domainNodeId
+                WHERE v.fingerprint_id = :fpId
+                  AND v.node_id = :nodeId
+                ORDER BY %s %s
+                """.formatted(dataToSortable, direction);
+        } else {
+            // Order by created_at
+            sql = """
+                SELECT v.id FROM value v
+                WHERE v.fingerprint_id = :fpId
+                  AND v.node_id = :nodeId
+                ORDER BY v.created_at %s
+                """.formatted(direction);
+        }
+        if (limit > 0) {
+            sql += " LIMIT :limit";
+        }
+
+        @SuppressWarnings("unchecked")
+        var query = (org.hibernate.query.NativeQuery<Number>) em.createNativeQuery(sql);
+        query.setParameter("fpId", fingerprintId)
+             .setParameter("nodeId", nodeId);
+        if (domainNodeId != null) {
+            query.setParameter("domainNodeId", domainNodeId);
+        }
+        if (limit > 0) {
+            query.setParameter("limit", limit);
+        }
+
+        List<Long> orderedIds = query.getResultList().stream()
+                .map(Number::longValue).toList();
+        if (orderedIds.isEmpty()) {
+            return List.of();
+        }
+
+        Session session = em.unwrap(Session.class);
+        Map<Long, ValueEntity> byId = new HashMap<>();
+        for (ValueEntity ve : session.findMultiple(ValueEntity.class, orderedIds)) {
+            byId.put(ve.getId(), ve);
+        }
+        List<ValueEntity> rtrn = new ArrayList<>(orderedIds.size());
+        for (Long id : orderedIds) {
+            ValueEntity ve = byId.get(id);
+            if (ve != null) rtrn.add(ve);
+        }
+        return rtrn;
+    }
+
     public List<ValueEntity> getAncestor(ValueEntity value, NodeEntity node){
         // Query IDs only, then load via findMultiple() to hit 2LC
         List<Number> ids = em.createNativeQuery("""
